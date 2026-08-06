@@ -1,1 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
 
+[project]
+name = "research-rag"
+version = "0.1.0"
+description = "A local RAG application for working with research documents"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "PyMuPDF",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+]
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
