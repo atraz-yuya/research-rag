@@ -35,3 +35,11 @@ class SearchResult:
     chunk: Chunk
     score: float
     rank: int
+
+
+@dataclass(frozen=True)
+class RagAnswer:
+    """An LLM-generated answer paired with application-managed sources."""
+
+    text: str
+    sources: tuple[SearchResult, ...]

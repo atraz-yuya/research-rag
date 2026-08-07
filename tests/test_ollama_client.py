@@ -176,3 +176,149 @@ def test_embed_texts_rejects_invalid_response_structure(
 
     with pytest.raises(OllamaError, match=message):
         OllamaClient().embed_texts(texts, model="embed-model")
+
+
+def test_generate_chat_posts_messages_and_returns_answer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_urlopen(
+        request: urllib.request.Request,
+        timeout: float,
+    ) -> FakeResponse:
+        captured["url"] = request.full_url
+        captured["payload"] = json.loads(request.data or b"")
+        captured["timeout"] = timeout
+        return FakeResponse(
+            b'{"message": {"role": "assistant", "content": " Generated answer. "}}'
+        )
+
+    install_fake_urlopen(monkeypatch, fake_urlopen)
+    client = OllamaClient(base_url="http://ollama.test/", timeout=9.0)
+    messages = [{"role": "user", "content": "Question"}]
+
+    answer = client.generate_chat(messages, model="generation-model")
+
+    assert answer == "Generated answer."
+    assert captured == {
+        "url": "http://ollama.test/api/chat",
+        "payload": {
+            "model": "generation-model",
+            "messages": messages,
+            "stream": False,
+        },
+        "timeout": 9.0,
+    }
+
+
+def test_generate_chat_reports_http_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_urlopen(
+        request: urllib.request.Request,
+        timeout: float,
+    ) -> FakeResponse:
+        raise urllib.error.HTTPError(
+            request.full_url,
+            500,
+            "Internal Server Error",
+            {},
+            io.BytesIO(b'{"error": "generation failed"}'),
+        )
+
+    install_fake_urlopen(monkeypatch, fake_urlopen)
+
+    with pytest.raises(OllamaError, match="HTTP 500: generation failed"):
+        OllamaClient().generate_chat(
+            [{"role": "user", "content": "Question"}],
+            model="generation-model",
+        )
+
+
+def test_generate_chat_reports_unavailable_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_urlopen(
+        request: urllib.request.Request,
+        timeout: float,
+    ) -> FakeResponse:
+        raise urllib.error.HTTPError(
+            request.full_url,
+            404,
+            "Not Found",
+            {},
+            io.BytesIO(b'{"error": "model not found"}'),
+        )
+
+    install_fake_urlopen(monkeypatch, fake_urlopen)
+
+    with pytest.raises(OllamaError, match="model 'missing-model' is not available"):
+        OllamaClient().generate_chat(
+            [{"role": "user", "content": "Question"}],
+            model="missing-model",
+        )
+
+
+def test_generate_chat_rejects_invalid_json(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_urlopen(
+        request: urllib.request.Request,
+        timeout: float,
+    ) -> FakeResponse:
+        return FakeResponse(b"not-json")
+
+    install_fake_urlopen(monkeypatch, fake_urlopen)
+
+    with pytest.raises(OllamaError, match="invalid JSON"):
+        OllamaClient().generate_chat(
+            [{"role": "user", "content": "Question"}],
+            model="generation-model",
+        )
+
+
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        ({}, "does not contain a message field"),
+        ({"message": "invalid"}, "message field must be an object"),
+        ({"message": {}}, "does not contain a content field"),
+        ({"message": {"content": 123}}, "content field must be a string"),
+    ],
+)
+def test_generate_chat_rejects_invalid_response_structure(
+    monkeypatch: pytest.MonkeyPatch,
+    payload: dict[str, object],
+    message: str,
+) -> None:
+    def fake_urlopen(
+        request: urllib.request.Request,
+        timeout: float,
+    ) -> FakeResponse:
+        return FakeResponse(json.dumps(payload).encode("utf-8"))
+
+    install_fake_urlopen(monkeypatch, fake_urlopen)
+
+    with pytest.raises(OllamaError, match=message):
+        OllamaClient().generate_chat(
+            [{"role": "user", "content": "Question"}],
+            model="generation-model",
+        )
+
+
+@pytest.mark.parametrize("content", ["", "   \n\t"])
+def test_generate_chat_rejects_empty_answer(
+    monkeypatch: pytest.MonkeyPatch,
+    content: str,
+) -> None:
+    def fake_urlopen(
+        request: urllib.request.Request,
+        timeout: float,
+    ) -> FakeResponse:
+        payload = {"message": {"role": "assistant", "content": content}}
+        return FakeResponse(json.dumps(payload).encode("utf-8"))
+
+    install_fake_urlopen(monkeypatch, fake_urlopen)
+
+    with pytest.raises(OllamaError, match="empty answer"):
+        OllamaClient().generate_chat(
+            [{"role": "user", "content": "Question"}],
+            model="generation-model",
+        )

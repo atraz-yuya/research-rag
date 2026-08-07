@@ -128,3 +128,26 @@ python -c 'from research_rag.ollama_client import OllamaClient; print(OllamaClie
 ### 次のIssue
 
 次のIssueでは、LLM回答生成、または質問の埋め込み生成から検索までを接続するRAGサービス統合を実装する。
+
+## Issue 006: 検索結果を根拠とする回答生成
+
+実施日: 2026-08-07
+
+### 実施内容
+
+- Retrieverが返した `SearchResult` を根拠として、Ollamaの生成モデルへ回答生成を依頼できるようにした
+- LLMの回答本文と実際に使用した検索結果を保持する、不変な `RagAnswer` データモデルを追加した
+- LLMへ、与えた資料だけを根拠にし、判断できない場合はその旨を示し、資料にない内容を推測で断定しないよう指示した
+- 検索順位、PDF名、1始まりのページ番号、チャンク本文をrank順にLLMのコンテキストへ渡すようにした
+- 引用情報はLLM出力から解析せず、アプリケーションが保持する元の `SearchResult` から `RagAnswer.sources` を構成する設計にした
+- OllamaとのHTTP通信を `ollama_client.py`、プロンプト構築と根拠の対応付けを `rag_service.py` に分離した
+- Ollamaの非ストリーミングチャットAPIに対応し、回答フィールドと空回答を検証する処理を追加した
+- 単体テストではfakeとmonkeypatchを使い、実際のOllamaへ接続しないようにした
+
+### 今回実装していないもの
+
+PDF読み込みから回答生成までの一括実行、質問embedding生成との統合、CLI、GUI、SQLite、会話履歴、FAISS、Chromaは実装していない。
+
+### 次のIssue
+
+次のIssueでは、PDF読み込みから回答生成までのRAGパイプラインとCLIを統合する。

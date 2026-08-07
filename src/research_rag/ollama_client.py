@@ -14,7 +14,7 @@ class OllamaError(RuntimeError):
 
 
 class OllamaClient:
-    """Minimal HTTP client for Ollama's embedding API."""
+    """Minimal HTTP client for Ollama's embedding and chat APIs."""
 
     def __init__(
         self,
@@ -40,10 +40,49 @@ class OllamaClient:
             if not text.strip():
                 raise ValueError(f"Text at index {index} is empty")
 
-        payload = json.dumps({"model": model, "input": texts}).encode("utf-8")
+        response_data = self._post_json(
+            "/api/embed",
+            {"model": model, "input": texts},
+            model=model,
+        )
+        return _parse_embeddings(response_data, expected_count=len(texts))
+
+    def generate_chat(
+        self,
+        messages: list[dict[str, str]],
+        model: str,
+    ) -> str:
+        """Generate a non-streaming chat answer using Ollama."""
+        if not model.strip():
+            raise ValueError("model must not be empty")
+        if not messages:
+            raise ValueError("messages must not be empty")
+
+        for index, message in enumerate(messages):
+            role = message.get("role")
+            content = message.get("content")
+            if not isinstance(role, str) or not role.strip():
+                raise ValueError(f"Message at index {index} has an invalid role")
+            if not isinstance(content, str) or not content.strip():
+                raise ValueError(f"Message at index {index} has empty content")
+
+        response_data = self._post_json(
+            "/api/chat",
+            {"model": model, "messages": messages, "stream": False},
+            model=model,
+        )
+        return _parse_chat_answer(response_data)
+
+    def _post_json(
+        self,
+        endpoint: str,
+        payload: dict[str, object],
+        model: str,
+    ) -> object:
+        request_body = json.dumps(payload).encode("utf-8")
         request = urllib.request.Request(
-            f"{self.base_url}/api/embed",
-            data=payload,
+            f"{self.base_url}{endpoint}",
+            data=request_body,
             headers={"Content-Type": "application/json"},
             method="POST",
         )
@@ -75,7 +114,7 @@ class OllamaClient:
         except (json.JSONDecodeError, UnicodeDecodeError) as exc:
             raise OllamaError("Ollama returned invalid JSON") from exc
 
-        return _parse_embeddings(response_data, expected_count=len(texts))
+        return response_data
 
 
 def _read_http_error_detail(error: urllib.error.HTTPError) -> str:
@@ -143,3 +182,26 @@ def _parse_embeddings(
         parsed_embeddings.append(parsed_embedding)
 
     return parsed_embeddings
+
+
+def _parse_chat_answer(response_data: object) -> str:
+    if not isinstance(response_data, dict):
+        raise OllamaError("Ollama response must be a JSON object")
+    if "message" not in response_data:
+        raise OllamaError("Ollama response does not contain a message field")
+
+    message = response_data["message"]
+    if not isinstance(message, dict):
+        raise OllamaError("Ollama message field must be an object")
+    if "content" not in message:
+        raise OllamaError("Ollama message does not contain a content field")
+
+    content = message["content"]
+    if not isinstance(content, str):
+        raise OllamaError("Ollama message content field must be a string")
+
+    answer = content.strip()
+    if not answer:
+        raise OllamaError("Ollama returned an empty answer")
+
+    return answer
