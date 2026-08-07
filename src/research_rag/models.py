@@ -26,3 +26,12 @@ class EmbeddedChunk:
 
     chunk: Chunk
     embedding: tuple[float, ...]
+
+
+@dataclass(frozen=True)
+class SearchResult:
+    """A ranked chunk returned by vector similarity search."""
+
+    chunk: Chunk
+    score: float
+    rank: int
