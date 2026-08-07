@@ -18,3 +18,11 @@ class Chunk:
     page_number: int
     chunk_index: int
     text: str
+
+
+@dataclass(frozen=True)
+class EmbeddedChunk:
+    """A chunk paired with its immutable embedding vector."""
+
+    chunk: Chunk
+    embedding: tuple[float, ...]

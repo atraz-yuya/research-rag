@@ -74,3 +74,35 @@
 ### 次のIssue
 
 次のIssueでは、チャンクから検索用ベクトルを作成する埋め込み生成機能と、そのテストを実装する。
+
+## Issue 004: Ollamaによる埋め込み生成
+
+実施日: 2026-08-07
+
+### 実施内容
+
+- 元の `Chunk` と変更されにくい埋め込みベクトルを保持する、不変な `EmbeddedChunk` データモデルを追加した
+- 複数の `Chunk.text` をOllamaの埋め込みAPIへ渡し、元の順番を維持して `EmbeddedChunk` へ変換する機能を追加した
+- OllamaとのHTTP通信を `ollama_client.py`、Chunkとの対応付けを `embedder.py` に分離した
+- Ollamaの接続先と埋め込みモデル名を呼び出し側から差し替えられるようにした
+- HTTP通信にはPython標準ライブラリを使用し、新しい外部依存は追加しなかった
+- 応答件数、空ベクトル、数値、有限値、次元数を検証し、不正な応答をエラーにした
+- 単体テストではHTTP通信をfakeまたはmonkeypatchで差し替え、実際のOllamaへ接続しないようにした
+
+### 手動接続確認
+
+通常の単体テストとは別に、Ollamaを起動して使用する埋め込みモデルを用意したうえで、モデル名を指定して確認する。
+
+```bash
+ollama serve
+ollama pull <embedding-model>
+python -c 'from research_rag.ollama_client import OllamaClient; print(OllamaClient().embed_texts(["manual embedding test"], model="<embedding-model>"))'
+```
+
+### 今回実装していないもの
+
+ベクトル類似度検索、回答生成、CLI、GUI、SQLite、FAISS、Chromaは実装していない。
+
+### 次のIssue
+
+次のIssueでは、埋め込みベクトルを用いたベクトル類似度検索と、そのテストを実装する。
