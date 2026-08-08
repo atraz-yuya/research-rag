@@ -185,3 +185,24 @@ GUI、SQLite、複数PDF、会話履歴、FAISS、Chroma、OCR、引用ページ
 ### 次の段階
 
 実際の研究PDFを用いて、抽出品質、チャンク設定、モデル選択、検索精度、回答品質を評価し改善する。
+
+## Issue 008: Retriever検索品質の評価基盤
+
+実施日: 2026-08-08
+
+### 実施内容
+
+- Retrieverのアルゴリズムを改善する前に、`SearchResult`と正解ページを比較する純粋な評価基盤を追加した
+- 質問ごとに複数の正解ページを許容し、Hit@1、Hit@3、first relevant rankを記録できるようにした
+- 複数ケースのHit@1率、Hit@3率、Mean Reciprocal Rank（MRR）を標準ライブラリだけで集計できるようにした
+- 空の評価結果は率と平均を定義できないため、集計時にエラーとする設計にした
+- 実PDFはGit管理せず、質問、正解ページ、検索結果、指標、考察を `docs/retrieval_evaluation.md` に記録する方針とした
+- 文書全体を問うglobal questionと局所Chunkを検索するlocal retrievalの性質の違いを、今後の改善候補として記録した
+
+### 今回変更していないもの
+
+Retriever、埋め込みモデル、chunk_size、overlap、RAGサービス、回答生成、CLIは変更していない。
+
+### 次のIssue
+
+複数の評価ケースを実PDFで測定し、そのHit率、MRR、失敗例に基づいてRetrieverの改善方法を決定する。
