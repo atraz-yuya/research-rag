@@ -250,3 +250,34 @@ Retriever、コサイン類似度、chunk_size、overlap、embeddingモデル、
 ### 次の段階
 
 実PDFでCase 4とCase 8を診断し、正解Chunkの実順位、score差、Chunk境界を記録したうえで、証拠に基づく改善仮説を決定する。
+
+## Issue 011: Heading-aware Chunking Comparison Experiment
+
+実施日: 2026-08-08
+
+### 実施内容
+
+- numbered section headingをhard boundaryとして扱う実験用Candidate Chunkerを追加した
+- 1行の番号付き見出しと、PDF抽出で番号とタイトルが改行された見出しを一般的な正規表現で検出するようにした
+- 見出しを削除せず新section側に残し、section内は既存と同じ文字数ベース、デフォルト1000文字、overlap 150文字で分割するようにした
+- Figure／Table由来テキストを削除せず、boundary placementだけをBaselineから変更した
+- 同じ12ケースについてBaselineとCandidateのHit@1、Hit@3、MRR、差分、ケース別検索結果を比較するrunnerを追加した
+- PDF読み込みを1回、Baseline／CandidateのChunk embeddingを各1回とし、各質問のembeddingを両方の検索で再利用する設計にした
+- 通常テストではfakeとmonkeypatchを使い、実PDFやOllamaへ接続せず処理回数と比較結果を確認した
+
+### 実装時に変更していないもの
+
+本番Chunker、Retriever、Embedder、RAGサービス、CLI、本番のchunk_size、overlap、埋め込みモデル、top_k、生成モデルは変更していない。比較実験コードの実装時点ではCandidateの採用判断を行わなかった。
+
+### 実PDF比較結果
+
+- BaselineはHit@1=`0.4167`、Hit@3=`0.8333`、MRR=`0.6111`だった
+- CandidateはHit@1=`0.4167`、Hit@3=`0.5833`、MRR=`0.4861`だった
+- Candidateの差分はHit@1=`+0.0000`、Hit@3=`-0.2500`、MRR=`-0.1250`だった
+- Case 8はTop3 missからrank 1へ改善し、heading boundaryによるノイズ分離の効果を確認できた
+- Case 5、6、10、11は新たにTop3 missとなり、一律のhard boundaryが文脈を分断しすぎる可能性が示された
+- 全体指標が悪化したためCandidateは本番Chunkerへ採用せず、実験コードは再現性のため保持することにした
+
+### 次の段階
+
+アルゴリズムを変更する前に、Case 8が改善し、Case 5、6、10、11が悪化した理由を診断する。

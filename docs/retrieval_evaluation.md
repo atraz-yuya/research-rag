@@ -223,6 +223,71 @@ cross-lingual retrievalも多少影響するが、主要因ではない。単純
 
 次のIssueでは一度に複数要因を変更せず、まず1つの要因だけを変更し、Baseline v1と比較する。
 
+## Issue 011: Heading-aware Chunking Comparison Experiment
+
+### 仮説
+
+numbered section headingをChunkのhard boundaryとすることで、Figure／Table由来テキストと次section本文の混在を減らし、retrieval品質が改善する可能性がある。
+
+この実験ではboundary placementだけを変更する。Figure／Table由来の文字列は削除せず、ページ境界、`chunk_size=1000`、`overlap=150`、埋め込みモデル、Retriever、`top_k=3`、評価ケースはBaseline v1と同じ条件を使う。本番`chunker.py`は置き換えず、Candidateの採否もコード側では判断しない。
+
+Candidateは、`4 Data`、`4.2 Data`、`4.2.1 Elliptic.`、`6 Conclusion`、`6.1 Literature Review`のような行頭のnumbered headingを検出する。実PDF抽出で番号とタイトルが改行された`4.2`改行`Data`形式も、番号行の直前をhard boundaryとする。見出しは削除せず新section側へ含め、sectionが`chunk_size`を超える場合はsection内を従来どおり文字数とoverlapで分割する。
+
+### 比較実験の実行方法
+
+PDFは1回だけ読み込み、同じ`PageText`からBaseline chunksとCandidate chunksを作る。それぞれのChunk embeddingは1回だけ生成する。各質問のembeddingも1回だけ生成し、同じquery embeddingをBaselineとCandidateの検索へ渡す。
+
+```python
+from pathlib import Path
+
+from research_rag.chunking_experiment import (
+    format_chunking_experiment_report,
+    run_chunking_experiment,
+)
+from research_rag.evaluation_runner import BASELINE_EVALUATION_CASES
+
+report = run_chunking_experiment(
+    Path("/path/to/文献レビューと実験的評価.pdf"),
+    BASELINE_EVALUATION_CASES,
+    embedding_model="qwen3-embedding:0.6b",
+)
+print(format_chunking_experiment_report(report))
+```
+
+### 正式な比較結果
+
+実PDFでBaselineとHeading-aware Candidateを同じ12ケースについて比較した。
+
+| 指標 | Baseline | Candidate | Delta（Candidate - Baseline） |
+| --- | ---: | ---: | ---: |
+| Hit@1 | `0.4167` | `0.4167` | `+0.0000` |
+| Hit@3 | `0.8333`（`10/12`） | `0.5833`（`7/12`） | `-0.2500` |
+| MRR | `0.6111` | `0.4861` | `-0.1250` |
+
+重要なケース別first relevant rankは次のとおり。
+
+| Case | Baseline | Candidate | 変化 |
+| --- | ---: | ---: | --- |
+| 3 | `1` | `2` | 悪化 |
+| 5 | `2` | `None` | 新たにTop3 miss |
+| 6 | `2` | `None` | 新たにTop3 miss |
+| 7 | `2` | `3` | 悪化 |
+| 8 | `None` | `1` | Top3 missからrank 1へ改善 |
+| 10 | `2` | `None` | 新たにTop3 miss |
+| 11 | `3` | `None` | 新たにTop3 miss |
+
+### 観察と採否判断
+
+- Case 8では仮説どおり大幅に改善し、正解p.20がTop3 missからrank 1になった。
+- この結果は、heading boundaryによってFigure／Table由来ノイズとsection本文を分離する考え方自体には効果があることを示す。
+- 一方、Hit@3は10/12から7/12、MRRは`0.6111`から`0.4861`へ低下した。
+- Case 5、6、10、11が新たにTop3 missとなった。
+- 全numbered headingを一律にhard boundaryとする戦略は、必要な文脈を分断しすぎている可能性がある。
+
+全体指標がBaseline v1を下回ったため、Heading-aware Candidateは本番Chunkerとして採用しない。ただし、Case 8の改善は重要な証拠であり、heading boundaryという考え方そのものが無効とは結論づけない。実験コードは再現性のため保持する。
+
+次のIssueではアルゴリズムを変更する前に、Case 8で改善し、Case 5、6、10、11で悪化した理由を診断する。
+
 ### 予備観測
 
 - PDF名: `文献レビューと実験的評価.pdf`（ローカルのみ）
