@@ -6,7 +6,7 @@ from typing import Any
 
 
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
-DEFAULT_TIMEOUT_SECONDS = 30.0
+DEFAULT_TIMEOUT_SECONDS = 300.0
 
 
 class OllamaError(RuntimeError):
@@ -68,7 +68,12 @@ class OllamaClient:
 
         response_data = self._post_json(
             "/api/chat",
-            {"model": model, "messages": messages, "stream": False},
+            {
+                "model": model,
+                "messages": messages,
+                "stream": False,
+                "think": False,
+            },
             model=model,
         )
         return _parse_chat_answer(response_data)
@@ -106,7 +111,7 @@ class OllamaClient:
             ) from exc
         except TimeoutError as exc:
             raise OllamaError(
-                f"Timed out while connecting to Ollama at {self.base_url}"
+                f"Timed out while waiting for Ollama at {self.base_url}"
             ) from exc
 
         try:

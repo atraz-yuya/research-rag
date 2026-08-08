@@ -7,7 +7,11 @@ from typing import Any
 
 import pytest
 
-from research_rag.ollama_client import OllamaClient, OllamaError
+from research_rag.ollama_client import (
+    DEFAULT_TIMEOUT_SECONDS,
+    OllamaClient,
+    OllamaError,
+)
 
 
 class FakeResponse:
@@ -76,6 +80,13 @@ def test_embed_texts_returns_empty_list_without_http_request(
     assert OllamaClient().embed_texts([], model="embed-model") == []
 
 
+def test_client_uses_extended_default_timeout() -> None:
+    client = OllamaClient()
+
+    assert DEFAULT_TIMEOUT_SECONDS == 300.0
+    assert client.timeout == 300.0
+
+
 def test_embed_texts_reports_connection_error(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_urlopen(
         request: urllib.request.Request,
@@ -89,6 +100,24 @@ def test_embed_texts_reports_connection_error(monkeypatch: pytest.MonkeyPatch) -
         OllamaClient().embed_texts(["text"], model="embed-model")
 
     assert isinstance(error.value.__cause__, urllib.error.URLError)
+
+
+def test_embed_texts_reports_wait_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_urlopen(
+        request: urllib.request.Request,
+        timeout: float,
+    ) -> FakeResponse:
+        raise TimeoutError("timed out")
+
+    install_fake_urlopen(monkeypatch, fake_urlopen)
+
+    with pytest.raises(
+        OllamaError,
+        match="Timed out while waiting for Ollama at http://localhost:11434",
+    ) as error:
+        OllamaClient().embed_texts(["text"], model="embed-model")
+
+    assert isinstance(error.value.__cause__, TimeoutError)
 
 
 def test_embed_texts_reports_unavailable_model(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -207,6 +236,7 @@ def test_generate_chat_posts_messages_and_returns_answer(
             "model": "generation-model",
             "messages": messages,
             "stream": False,
+            "think": False,
         },
         "timeout": 9.0,
     }

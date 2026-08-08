@@ -151,3 +151,37 @@ PDF読み込みから回答生成までの一括実行、質問embedding生成�
 ### 次のIssue
 
 次のIssueでは、PDF読み込みから回答生成までのRAGパイプラインとCLIを統合する。
+
+## Issue 007: 単一PDFへ質問できるCLI版MVP
+
+実施日: 2026-08-07
+
+### 実施内容
+
+- PDF Reader、Chunker、Embedder、Retriever、回答生成を統合し、単一PDFから `RagAnswer` まで一連の処理を実行できるようにした
+- PDF、`PageText`、`Chunk`、`EmbeddedChunk`、質問embedding、`SearchResult`、`RagAnswer` の順に既存機能を接続した
+- Chunkと質問のembeddingに同じ埋め込みモデル名と同じ `OllamaClient` を使用する設計にした
+- 質問は1件の文字列として直接埋め込みAPIへ渡し、質問用の不要な `Chunk` を作成しないようにした
+- 検索件数 `top_k` のデフォルトを3とした
+- `argparse`を使用し、PDFパス、質問、埋め込みモデル、生成モデル、検索件数、Ollama接続先を指定できるCLIを追加した
+- 回答本文と引用情報を分離して表示し、PDF名、1始まりのページ番号、検索順位、類似度、根拠本文は `RagAnswer.sources` の `SearchResult` から取得するようにした
+- PDF、質問、Ollama、モデル、検索に関する下位レイヤーのエラーをCLIで人間向けに表示し、非0で終了するようにした
+- 通常の単体テストではfakeとmonkeypatchを使用し、実際のOllamaへ接続しないようにした
+- PDFを指定して質問し、回答と根拠を表示するCLI版MVPの完成条件を満たした
+
+### 実機確認
+
+- 実PDFから回答と参照情報まで正常に出力できることを確認した
+- `qwen3:4b` ではthinkingが回答本文へ混入したため、最終回答だけを生成できた `qwen3:4b-instruct` をデフォルト生成モデルに変更した
+
+### 開発環境
+
+macOSで `.venv` 内のeditable install用 `.pth` にhiddenフラグが付いた事例があったため、現在の仮想環境ディレクトリ名に合わせてREADMEの手順を `venv` へ更新した。
+
+### 今回実装していないもの
+
+GUI、SQLite、複数PDF、会話履歴、FAISS、Chroma、OCR、引用ページへの移動、LaTeX出力、App Store対応、LangChain、LlamaIndexは実装していない。
+
+### 次の段階
+
+実際の研究PDFを用いて、抽出品質、チャンク設定、モデル選択、検索精度、回答品質を評価し改善する。

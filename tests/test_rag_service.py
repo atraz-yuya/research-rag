@@ -1,7 +1,17 @@
+from pathlib import Path
+from typing import Any
+
 import pytest
 
-from research_rag.models import Chunk, RagAnswer, SearchResult
-from research_rag.rag_service import generate_answer
+from research_rag import rag_service
+from research_rag.models import (
+    Chunk,
+    EmbeddedChunk,
+    PageText,
+    RagAnswer,
+    SearchResult,
+)
+from research_rag.rag_service import answer_question_from_pdf, generate_answer
 
 
 class StubChatClient:
@@ -108,6 +118,10 @@ def test_generate_answer_instructs_model_to_use_only_sources() -> None:
     assert "only the provided source material" in system_prompt
     assert "cannot be determined" in system_prompt
     assert "Do not guess" in system_prompt
+    assert "final answer only" in system_prompt
+    assert "Do not output analysis or reasoning" in system_prompt
+    assert 'prefaces such as "Let me analyze"' in system_prompt
+    assert "same language as the user's question" in system_prompt
     assert "concise" in system_prompt
 
 
@@ -210,5 +224,295 @@ def test_generate_answer_rejects_empty_llm_answer(response: str) -> None:
             "Question",
             [source],
             model="generation-model",
+            client=client,
+        )
+
+
+class StubEmbeddingClient:
+    def __init__(
+        self,
+        query_embedding: list[float],
+        events: list[tuple[Any, ...]],
+    ) -> None:
+        self.query_embedding = query_embedding
+        self.events = events
+
+    def embed_texts(
+        self,
+        texts: list[str],
+        model: str,
+    ) -> list[list[float]]:
+        self.events.append(("query_embedder", texts, model))
+        return [self.query_embedding]
+
+
+def test_answer_question_from_pdf_connects_pipeline_and_preserves_sources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pdf_path = Path("paper.pdf")
+    question = "What is the main contribution?"
+    pages = [PageText("paper.pdf", 1, "Extracted page text")]
+    chunks = [Chunk("paper.pdf", 1, 0, "Chunk text")]
+    embedded_chunks = [EmbeddedChunk(chunks[0], (1.0, 0.0))]
+    search_results = [SearchResult(chunks[0], 0.95, 1)]
+    expected_answer = RagAnswer("Grounded answer", tuple(search_results))
+    events: list[tuple[Any, ...]] = []
+    client = StubEmbeddingClient([1.0, 0.0], events)
+
+    def fake_extract_page_texts(received_path: Path) -> list[PageText]:
+        events.append(("pdf_reader", received_path))
+        return pages
+
+    def fake_split_pages_into_chunks(
+        received_pages: list[PageText],
+    ) -> list[Chunk]:
+        events.append(("chunker", received_pages))
+        return chunks
+
+    def fake_embed_chunks(
+        received_chunks: list[Chunk],
+        model: str,
+        received_client: Any,
+    ) -> list[EmbeddedChunk]:
+        events.append(
+            ("chunk_embedder", received_chunks, model, received_client)
+        )
+        return embedded_chunks
+
+    def fake_retrieve_similar_chunks(
+        query_embedding: list[float],
+        received_embedded_chunks: list[EmbeddedChunk],
+        top_k: int,
+    ) -> list[SearchResult]:
+        events.append(
+            ("retriever", query_embedding, received_embedded_chunks, top_k)
+        )
+        return search_results
+
+    def fake_generate_answer(
+        received_question: str,
+        received_results: list[SearchResult],
+        model: str,
+        received_client: Any,
+    ) -> RagAnswer:
+        events.append(
+            (
+                "answer_generator",
+                received_question,
+                received_results,
+                model,
+                received_client,
+            )
+        )
+        return expected_answer
+
+    monkeypatch.setattr(
+        rag_service,
+        "extract_page_texts",
+        fake_extract_page_texts,
+    )
+    monkeypatch.setattr(
+        rag_service,
+        "split_pages_into_chunks",
+        fake_split_pages_into_chunks,
+    )
+    monkeypatch.setattr(rag_service, "embed_chunks", fake_embed_chunks)
+    monkeypatch.setattr(
+        rag_service,
+        "retrieve_similar_chunks",
+        fake_retrieve_similar_chunks,
+    )
+    monkeypatch.setattr(rag_service, "generate_answer", fake_generate_answer)
+
+    answer = answer_question_from_pdf(
+        pdf_path,
+        question,
+        embedding_model="shared-embedding-model",
+        generation_model="generation-model",
+        top_k=2,
+        client=client,
+    )
+
+    assert answer is expected_answer
+    assert answer.sources[0] is search_results[0]
+    assert events == [
+        ("pdf_reader", pdf_path),
+        ("chunker", pages),
+        (
+            "chunk_embedder",
+            chunks,
+            "shared-embedding-model",
+            client,
+        ),
+        (
+            "query_embedder",
+            [question],
+            "shared-embedding-model",
+        ),
+        ("retriever", [1.0, 0.0], embedded_chunks, 2),
+        (
+            "answer_generator",
+            question,
+            search_results,
+            "generation-model",
+            client,
+        ),
+    ]
+
+
+def test_answer_question_from_pdf_rejects_empty_question_before_processing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    called = False
+
+    def fake_extract_page_texts(pdf_path: Path) -> list[PageText]:
+        nonlocal called
+        called = True
+        return []
+
+    monkeypatch.setattr(
+        rag_service,
+        "extract_page_texts",
+        fake_extract_page_texts,
+    )
+
+    with pytest.raises(ValueError, match="question must not be empty"):
+        answer_question_from_pdf(
+            Path("paper.pdf"),
+            "  \n\t",
+            embedding_model="embedding-model",
+            generation_model="generation-model",
+        )
+
+    assert called is False
+
+
+@pytest.mark.parametrize(
+    "failure_stage",
+    [
+        "pdf_reader",
+        "chunker",
+        "chunk_embedder",
+        "query_embedder",
+        "retriever",
+        "answer_generator",
+    ],
+)
+def test_answer_question_from_pdf_propagates_downstream_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    failure_stage: str,
+) -> None:
+    pages = [PageText("paper.pdf", 1, "Page text")]
+    chunks = [Chunk("paper.pdf", 1, 0, "Chunk text")]
+    embedded_chunks = [EmbeddedChunk(chunks[0], (1.0, 0.0))]
+    search_results = [SearchResult(chunks[0], 1.0, 1)]
+
+    def fail_if(stage: str) -> None:
+        if failure_stage == stage:
+            raise RuntimeError(f"failure in {stage}")
+
+    def fake_extract_page_texts(pdf_path: Path) -> list[PageText]:
+        fail_if("pdf_reader")
+        return pages
+
+    def fake_split_pages_into_chunks(
+        received_pages: list[PageText],
+    ) -> list[Chunk]:
+        fail_if("chunker")
+        return chunks
+
+    def fake_embed_chunks(
+        received_chunks: list[Chunk],
+        model: str,
+        client: Any,
+    ) -> list[EmbeddedChunk]:
+        fail_if("chunk_embedder")
+        return embedded_chunks
+
+    def fake_retrieve_similar_chunks(
+        query_embedding: list[float],
+        received_embedded_chunks: list[EmbeddedChunk],
+        top_k: int,
+    ) -> list[SearchResult]:
+        fail_if("retriever")
+        return search_results
+
+    def fake_generate_answer(
+        question: str,
+        received_results: list[SearchResult],
+        model: str,
+        client: Any,
+    ) -> RagAnswer:
+        fail_if("answer_generator")
+        return RagAnswer("Answer", tuple(search_results))
+
+    class FailingQueryClient:
+        def embed_texts(
+            self,
+            texts: list[str],
+            model: str,
+        ) -> list[list[float]]:
+            fail_if("query_embedder")
+            return [[1.0, 0.0]]
+
+    monkeypatch.setattr(
+        rag_service,
+        "extract_page_texts",
+        fake_extract_page_texts,
+    )
+    monkeypatch.setattr(
+        rag_service,
+        "split_pages_into_chunks",
+        fake_split_pages_into_chunks,
+    )
+    monkeypatch.setattr(rag_service, "embed_chunks", fake_embed_chunks)
+    monkeypatch.setattr(
+        rag_service,
+        "retrieve_similar_chunks",
+        fake_retrieve_similar_chunks,
+    )
+    monkeypatch.setattr(rag_service, "generate_answer", fake_generate_answer)
+
+    with pytest.raises(RuntimeError, match=f"failure in {failure_stage}"):
+        answer_question_from_pdf(
+            Path("paper.pdf"),
+            "Question",
+            embedding_model="embedding-model",
+            generation_model="generation-model",
+            client=FailingQueryClient(),
+        )
+
+
+def test_answer_question_from_pdf_rejects_missing_search_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pages = [PageText("paper.pdf", 1, "Page text")]
+    chunks = [Chunk("paper.pdf", 1, 0, "Chunk text")]
+    embedded_chunks = [EmbeddedChunk(chunks[0], (1.0, 0.0))]
+    client = StubEmbeddingClient([1.0, 0.0], [])
+
+    monkeypatch.setattr(rag_service, "extract_page_texts", lambda path: pages)
+    monkeypatch.setattr(
+        rag_service,
+        "split_pages_into_chunks",
+        lambda received_pages: chunks,
+    )
+    monkeypatch.setattr(
+        rag_service,
+        "embed_chunks",
+        lambda received_chunks, model, client: embedded_chunks,
+    )
+    monkeypatch.setattr(
+        rag_service,
+        "retrieve_similar_chunks",
+        lambda query_embedding, received_chunks, top_k: [],
+    )
+
+    with pytest.raises(ValueError, match="no search results"):
+        answer_question_from_pdf(
+            Path("paper.pdf"),
+            "Question",
+            embedding_model="embedding-model",
+            generation_model="generation-model",
             client=client,
         )
