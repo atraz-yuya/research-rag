@@ -379,6 +379,83 @@ text: 0.5
 
 次の実験ではChunking戦略そのものを変更せず、heading detectionのfalse positiveだけを改善する。Issue 012では診断結果の記録に留め、実装ロジックは変更しない。
 
+## Issue 013: Heading Detection False-positive Fix Experiment
+
+### 仮説
+
+Candidate v1ではグラフのnumeric axis valuesをsection headingとして誤検出しており、このfalse positiveを除去することでheading-aware chunkingの性能低下を軽減できる可能性がある。
+
+Candidate v1と本番Chunkerは変更せず、heading boundary戦略を維持したCandidate v2を別モジュールとして比較する。変更する変数はheading detectorだけであり、ページ境界、`chunk_size=1000`、`overlap=150`、Figure／Table本文の保持、section内の文字数分割はCandidate v1と同じ条件とする。
+
+### Candidate v2の判定
+
+- `4 Data`、`4.2 Data`、`4.2.1 Elliptic.`などの番号とタイトルが同一行にあるheadingは直接検出する。
+- number-only行は単独でheadingと判定しない。
+- split headingは、直前の非空行が数値でなく、次の非空行がtitle-likeで、さらに次の非空行がbody-likeの場合だけ検出する。
+- この周辺行確認により`4.2`改行`Data`改行`The methods are compared ...`を維持する。
+- `0.7`、`0.6`、`2.5`、`5.0`などの連続したaxis values、文脈を伴わない`2022`や`49`はheadingにしない。
+- 特定のsection名や数値はハードコードしない。
+
+### 3-way比較の実行方法
+
+PDFは1回だけ読み、同じ`PageText`からBaseline、Candidate v1、Candidate v2のChunkを作成する。Chunk embeddingはvariantごとに1回、質問embeddingは1ケースにつき1回だけ生成し、同じquery embeddingを3つのRetriever呼び出しへ渡す。Retriever、評価ロジック、`top_k=3`、`qwen3-embedding:0.6b`、12件の評価ケースは共通とする。
+
+```python
+from pathlib import Path
+
+from research_rag.evaluation_runner import BASELINE_EVALUATION_CASES
+from research_rag.heading_detection_experiment import (
+    format_heading_detection_experiment_report,
+    run_heading_detection_experiment,
+)
+
+report = run_heading_detection_experiment(
+    Path("/path/to/文献レビューと実験的評価.pdf"),
+    BASELINE_EVALUATION_CASES,
+    embedding_model="qwen3-embedding:0.6b",
+)
+print(format_heading_detection_experiment_report(report))
+```
+
+### 正式な3-way比較結果
+
+実PDFで12ケースを実行した結果を記録する。
+
+| Variant | total chunks | Hit@1 | Hit@3 | MRR |
+| --- | ---: | ---: | ---: | ---: |
+| Baseline | `204` | `0.4167` | `0.8333` | `0.6111` |
+| Candidate v1 | `316` | `0.4167` | `0.5833` | `0.4861` |
+| Candidate v2 | `218` | `0.4167` | `0.7500` | `0.5417` |
+
+| Delta | Hit@1 | Hit@3 | MRR |
+| --- | ---: | ---: | ---: |
+| Candidate v1 - Baseline | `+0.0000` | `-0.2500` | `-0.1250` |
+| Candidate v2 - Baseline | `+0.0000` | `-0.0833` | `-0.0694` |
+| Candidate v2 - Candidate v1 | `+0.0000` | `+0.1667` | `+0.0556` |
+
+重要なケース別first relevant rankは次のとおり。
+
+| Case | Baseline | Candidate v1 | Candidate v2 | 観察 |
+| --- | ---: | ---: | ---: | --- |
+| 3 | `1` | `2` | `3` | v2でも悪化 |
+| 5 | `2` | `None` | `None` | v2でもTop3 miss |
+| 6 | `2` | `None` | `None` | v2でもTop3 miss |
+| 8 | `None` | `1` | `1` | heading boundaryによる改善を維持 |
+| 10 | `2` | `None` | `3` | false positive修正後にTop3へ回復 |
+| 11 | `3` | `None` | `3` | false positive修正後にBaseline順位へ回復 |
+
+### 観察と採否判断
+
+- Chunk数はCandidate v1の316からCandidate v2の218へ減少し、Baselineの204に近づいた。
+- numeric axis valuesなどのheading誤検出が、不要なChunk大量生成の原因だったことが強く支持された。
+- false positive修正により、Hit@3は`0.5833`から`0.7500`、MRRは`0.4861`から`0.5417`へ回復した。
+- Case 8はCandidate v1とv2の両方でrank 1となり、heading boundaryによる改善はnumeric false positiveを除去しても維持された。
+- Case 10とCase 11はTop3へ回復した一方、Case 3、5、6のregressionは残った。
+
+heading detectorのfalse positive修正は有効であり、Candidate v2はCandidate v1より明確に改善した。ただしBaselineのHit@3とMRRには届かないため、本番Chunkerとしてはまだ採用しない。Candidate v1とCandidate v2は比較の再現性のため保持する。
+
+次のIssueではBaselineとCandidate v2についてCase 3、5、6のfull rankingとrelevant page Chunk構造を比較し、正しいheading boundary自体がretrievalを悪化させる理由を診断する。
+
 ### 予備観測
 
 - PDF名: `文献レビューと実験的評価.pdf`（ローカルのみ）

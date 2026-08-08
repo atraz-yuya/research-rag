@@ -313,3 +313,36 @@ Retriever、コサイン類似度、chunk_size、overlap、embeddingモデル、
 ### 次の段階
 
 Chunking戦略を変えず、heading detectionのfalse positiveだけを改善する比較実験を行う。
+
+## Issue 013: Heading Detection False-positive Fix Experiment
+
+実施日: 2026-08-08
+
+### 実施内容
+
+- Candidate v1を保持したまま、heading detectionだけを保守的にしたCandidate v2を別モジュールへ追加した
+- 同一行の番号付きheadingは維持し、number-only行は周辺のtitle-like行とbody-like行を確認してからsplit headingと判定するようにした
+- 直前の非空行が数値の場合はsplit headingにしないことで、連続したグラフ軸目盛りのfalse positiveを抑制した
+- `4.2`改行`Data`のような本物のsplit headingは、後続本文を含む文脈によって検出できるようにした
+- Baseline、Candidate v1、Candidate v2のChunk数、Hit@1、Hit@3、MRR、3種類の差分、ケース別結果を比較するrunnerを追加した
+- PDF読み込みを1回、Chunk embeddingをvariantごとに1回とし、各質問のembeddingを3 variantの検索で再利用する設計にした
+- 通常テストではfakeとmonkeypatchを使い、実PDFやOllamaを必要とせずdetectorと処理回数を検証した
+
+### 実装時に変更していないもの
+
+本番Chunker、Candidate v1、Retriever、Embedder、RAGサービス、CLI、本番のchunk_size、overlap、top_k、埋め込みモデルは変更していない。比較実験コードの実装時点ではCandidate v2の採用判断を行わなかった。
+
+### 実PDF比較結果
+
+- Chunk数はBaseline=`204`、Candidate v1=`316`、Candidate v2=`218`だった
+- Candidate v2はHit@1=`0.4167`、Hit@3=`0.7500`、MRR=`0.5417`だった
+- Candidate v2 - Candidate v1はHit@1=`+0.0000`、Hit@3=`+0.1667`、MRR=`+0.0556`だった
+- Candidate v2 - BaselineはHit@1=`+0.0000`、Hit@3=`-0.0833`、MRR=`-0.0694`だった
+- false positive修正によって不要なChunkが減少し、Hit@3とMRRが明確に回復した
+- Case 8のrank 1を維持し、Case 10とCase 11はTop3へ回復した
+- Case 3、5、6のregressionはCandidate v2にも残った
+- Baselineの全体指標には届かないためCandidate v2を本番Chunkerへ採用せず、Candidate v1／v2は再現性のため保持することにした
+
+### 次の段階
+
+BaselineとCandidate v2についてCase 3、5、6のfull rankingとrelevant page Chunk構造を比較し、正しいheading boundary自体によるregressionを診断する。
