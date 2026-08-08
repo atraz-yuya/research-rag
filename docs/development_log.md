@@ -228,3 +228,25 @@ Retriever、コサイン類似度、embeddingモデル、chunk_size、overlap、
 ### 次の段階
 
 確定した12ケースでbaseline runnerを実行し、Hit@1、Hit@3、MRRと失敗例を記録する。
+
+## Issue 010: Retrieval failure diagnosis
+
+実施日: 2026-08-08
+
+### 実施内容
+
+- Retrieverを変更する前に、full rankingから検索失敗の原因を観察する診断機能を追加した
+- 診断表示用のTop Nと、正解ページに属するすべてのChunkを分けて保持できるようにした
+- 正解ChunkがTop 10外でもfirst relevant rank、score、chunk_index、本文を確認できるようにした
+- PDF読み込み、Chunk分割、文書Chunk embeddingを1回だけ実行し、複数の診断ケースで再利用するrunnerを追加した
+- 各質問だけを個別にembeddingし、既存Retrieverへ全Chunk件数を`top_k`として渡す設計にした
+- 実PDFとOllamaを使わない単体テストで、full ranking、複数の正解Chunk、処理回数、入力検証、レポート出力を確認した
+- 初期診断対象をBaseline v1でTop3 missとなったCase 4とCase 8とした
+
+### 今回変更していないもの
+
+Retriever、コサイン類似度、chunk_size、overlap、embeddingモデル、本番RAGのtop_k、RAGサービス、CLI、生成モデルは変更していない。検索精度そのものの改善も行っていない。
+
+### 次の段階
+
+実PDFでCase 4とCase 8を診断し、正解Chunkの実順位、score差、Chunk境界を記録したうえで、証拠に基づく改善仮説を決定する。

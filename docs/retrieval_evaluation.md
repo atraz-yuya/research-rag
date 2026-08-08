@@ -138,6 +138,91 @@ runnerはPDF読み込み、Chunk分割、文書Chunk embeddingを1回だけ実�
 - overlap: `150`
 - 変更・補足: Q4の質問を明確化し、Q7の`relevant_pages`を`(11, 12)`へ修正した12ケースで再実行した。
 
+## Issue 010: Retrieval failure diagnosis
+
+### 目的
+
+Retrieverをまだ変更せず、Baseline v1でTop3 missとなったCase 4とCase 8を観察する。正解ページに属するChunkの実順位、上位Chunkとのscore差、Chunk境界と本文を確認し、次の改善仮説を推測ではなく診断結果から決める。
+
+初期診断対象は次の2ケースとする。
+
+- Case 4: relevant_pages=`(9,)`、Baseline v1のTop3=`(2, 12, 12)`
+- Case 8: relevant_pages=`(20,)`、Baseline v1のTop3=`(29, 12, 4)`
+
+診断runnerはPDF読み込み、Chunk分割、文書Chunk embeddingをそれぞれ1回だけ実行し、両ケースで再利用する。各質問だけを個別にembeddingし、既存の`retrieve_similar_chunks`へ`top_k=len(embedded_chunks)`を渡して全Chunkのrankingを得る。表示用のTop 10とは別に、正解ページに属するすべてのChunkをfull rankingから抽出するため、正解がTop 10外でもfirst relevant rankを確認できる。
+
+```python
+from pathlib import Path
+
+from research_rag.evaluation_runner import BASELINE_EVALUATION_CASES
+from research_rag.retrieval_diagnostics import (
+    format_retrieval_diagnostics_report,
+    run_retrieval_diagnostics,
+)
+
+failure_cases = (
+    BASELINE_EVALUATION_CASES[3],  # Case 4
+    BASELINE_EVALUATION_CASES[7],  # Case 8
+)
+report = run_retrieval_diagnostics(
+    Path("/path/to/文献レビューと実験的評価.pdf"),
+    failure_cases,
+    embedding_model="qwen3-embedding:0.6b",
+    top_n=10,
+)
+print(format_retrieval_diagnostics_report(report))
+```
+
+### 実診断結果
+
+#### Case 4
+
+- relevant_pages: `(9,)`
+- 日本語質問: `文献レビューの83本の非レビュー論文について、最も多く利用されている学習方法は何ですか？`
+- 日本語質問のfirst relevant rank: `24`
+- 日本語質問のbest relevant score: `0.361770`
+- 英語質問: `Among the 83 non-review papers in the literature review, which learning method is used most frequently?`
+- 英語質問のfirst relevant rank: `14`
+- 英語質問のbest relevant score: `0.503058`
+
+観察:
+
+- 英語化によりfirst relevant rankが24位から14位へ改善したため、cross-lingual embeddingの影響はある。
+- 英語でも正解ChunkはTop 10外であり、言語差だけでは検索失敗を説明できない。
+- rank 2のp.12には、`unsupervised learning is by far the most applied method`という意味的に非常に近い記述がある。
+- p.12はtop-cited papersについての記述であり、質問で指定した83 non-review papersとは対象範囲が異なる。
+- 正解p.9には、83 non-review papersという対象範囲と`The most popular method is unsupervised learning`の両方が含まれている。
+- Dense semantic retrievalが質問のscope constraintを十分に区別できていない可能性がある。
+
+#### Case 8
+
+- relevant_pages: `(20,)`
+- 日本語質問: `実験評価ではどの2つのデータセットを使用していますか？`
+- 日本語質問のfirst relevant rank: `7`
+- 日本語質問のbest relevant score: `0.435093`
+- 英語質問: `Which two data sets are used in the experimental evaluation?`
+- 英語質問のfirst relevant rank: `6`
+- 英語質問のbest relevant score: `0.546377`
+
+観察:
+
+- 英語化によるfirst relevant rankの改善は7位から6位のみであり、cross-lingual retrievalは主原因ではない。
+- 正解p.20のchunk 0には、EllipticとIBM money launderingの記述が存在する。
+- 同じChunkの前半にはFigure 5由来の大量の表・図テキストが含まれる。
+- このchunk contaminationがembedding品質を低下させている可能性がある。
+- `two data sets`などの類似表現を含むが答えを含まないページが上位に来る。
+
+### 診断結果からの結論
+
+現段階では、少なくとも次の2種類のfailureが存在する。
+
+1. Chunk quality / PDF extraction noise
+2. Dense retrievalが質問のscopeや条件を十分に区別できない問題
+
+cross-lingual retrievalも多少影響するが、主要因ではない。単純に`top_k`を増やすだけではCase 4の正解Chunkが上位に来ない問題を解消できないため、根本的改善とはしない。
+
+次のIssueでは一度に複数要因を変更せず、まず1つの要因だけを変更し、Baseline v1と比較する。
+
 ### 予備観測
 
 - PDF名: `文献レビューと実験的評価.pdf`（ローカルのみ）
