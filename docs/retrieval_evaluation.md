@@ -288,6 +288,97 @@ print(format_chunking_experiment_report(report))
 
 次のIssueではアルゴリズムを変更する前に、Case 8で改善し、Case 5、6、10、11で悪化した理由を診断する。
 
+## Issue 012: Chunking Regression Diagnosis
+
+### 目的
+
+Chunkingアルゴリズムを変更せず、Issue 011でCase 8が改善し、Case 5、6、10、11が悪化した理由を、Baseline ChunkとHeading-aware Candidate Chunkの直接比較から観察する。Case 3とCase 7を含む任意の`RetrievalEvaluationCase`にも使用できる汎用的な診断runnerとする。
+
+初期診断対象は次の5ケースとする。
+
+- Case 5: Baseline rank 2、Candidate Top3 miss
+- Case 6: Baseline rank 2、Candidate Top3 miss
+- Case 8: Baseline Top3 miss、Candidate rank 1
+- Case 10: Baseline rank 2、Candidate Top3 miss
+- Case 11: Baseline rank 3、Candidate Top3 miss
+
+### 観察する仮説
+
+- 仮説A: heading boundaryによってFigure／Tableノイズから本文が分離され、Case 8が改善した。
+- 仮説B: heading boundaryによって意味的に必要な前後文脈まで切断され、Case 5、6、10、11が悪化した。
+- 仮説C: Candidateが短いChunkを大量に生成し、ランキング構造そのものが変化した。
+- 仮説D: heading境界を跨ぐoverlapがないため、重要情報が複数Chunkへ分断された。
+
+診断コードでは、どの仮説が正しいかを判定しない。full ranking、Chunk本文、Chunk長、文書統計だけを提供し、実PDFの結果から改善方針を決める。
+
+### 診断方法
+
+PDF読み込みは1回だけ行い、同じ`PageText`からBaselineとCandidateのChunkを生成する。Chunk embeddingは各variantで1回、質問embeddingは1ケースにつき1回だけ生成し、同じquery embeddingを両variantへ渡す。full rankingは既存`retrieve_similar_chunks`へvariantごとの`top_k=len(embedded_chunks)`を渡して取得する。
+
+```python
+from pathlib import Path
+
+from research_rag.chunking_diagnostics import (
+    format_chunking_diagnostics_report,
+    run_chunking_diagnostics,
+)
+from research_rag.evaluation_runner import BASELINE_EVALUATION_CASES
+
+regression_cases = (
+    BASELINE_EVALUATION_CASES[4],   # Case 5
+    BASELINE_EVALUATION_CASES[5],   # Case 6
+    BASELINE_EVALUATION_CASES[7],   # Case 8
+    BASELINE_EVALUATION_CASES[9],   # Case 10
+    BASELINE_EVALUATION_CASES[10],  # Case 11
+)
+report = run_chunking_diagnostics(
+    Path("/path/to/文献レビューと実験的評価.pdf"),
+    regression_cases,
+    embedding_model="qwen3-embedding:0.6b",
+    top_n=5,
+)
+print(format_chunking_diagnostics_report(report))
+```
+
+### 実診断結果
+
+Heading-aware Candidateでは、グラフの軸目盛りがnumbered headingとして誤認識され、意味のない極小Chunkが生成されていた。p.26で確認した具体例は次のとおり。
+
+```text
+chunk_index=1
+character_count=3
+text: 0.7
+
+chunk_index=2
+character_count=3
+text: 0.6
+
+chunk_index=3
+character_count=3
+text: 0.5
+```
+
+`experimental_chunker.py`を実ファイルで確認すると、number-only headingの分岐は`\d+(?:\.\d+)+`であり、`.`はすでにliteral periodとしてエスケープされている。false positiveの原因はregex wildcardではなく、literal periodを使った現在のパターンでも`0.7`のような小数値そのものがnumber-only headingに一致することである。そのため、`.`を`\.`へ変更するだけの修正では解決せず、number-only headingの判定条件自体を見直す必要がある。
+
+文書全体のChunk統計:
+
+今回提供された診断結果には文書全体の集計値が含まれていないため、次の欄は未記録のままとする。
+
+| Variant | total count | min length | max length | mean length | median length |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Baseline | `<未記録>` | `<未記録>` | `<未記録>` | `<未記録>` | `<未記録>` |
+| Candidate | `<未記録>` | `<未記録>` | `<未記録>` | `<未記録>` | `<未記録>` |
+
+### 診断結果からの結論
+
+- Case 8ではheading boundaryによってFigure／Table由来ノイズとsection本文を分離する効果があり、検索順位が改善した。
+- Candidateではグラフ軸目盛りなどがheadingとして誤検出され、意味のない非常に短いChunkが生成されている。
+- このfalse positiveによりChunk数と検索ランキングが不要に変化している可能性が高い。
+- Case 11は正解がBaselineのrank 3からCandidateのrank 4程度へ下がったものであり、文脈破壊だけが原因とはまだ断定できない。
+- 仮説AはCase 8の観察と整合し、仮説Cも極小Chunkの生成によって支持される。一方、仮説Bと仮説Dは今回の情報だけでは確定できない。
+
+次の実験ではChunking戦略そのものを変更せず、heading detectionのfalse positiveだけを改善する。Issue 012では診断結果の記録に留め、実装ロジックは変更しない。
+
 ### 予備観測
 
 - PDF名: `文献レビューと実験的評価.pdf`（ローカルのみ）

@@ -281,3 +281,35 @@ Retriever、コサイン類似度、chunk_size、overlap、embeddingモデル、
 ### 次の段階
 
 アルゴリズムを変更する前に、Case 8が改善し、Case 5、6、10、11が悪化した理由を診断する。
+
+## Issue 012: Chunking Regression Diagnosis
+
+実施日: 2026-08-08
+
+### 実施内容
+
+- BaselineとHeading-aware Candidateのfull ranking、Top 5、正解Chunkを直接比較する診断モジュールを追加した
+- 正解ChunkがTop 5外でもfirst relevant rankとbest relevant scoreを取得できるようにした
+- rank、ページ番号、chunk_index、score、文字数、本文を保持する診断用データを追加した
+- relevant page上で各variantが生成した全Chunkの個数、chunk_index、文字数、本文を比較できるようにした
+- 文書全体のChunk数と文字数の最小、最大、平均、中央値を標準ライブラリで計算するようにした
+- PDF読み込みを1回、Baseline／CandidateのChunk embeddingを各1回とし、質問embeddingを両variantのfull rankingで再利用する設計にした
+- 実PDFとOllamaを使わない単体テストで、診断情報、統計、処理回数、入力検証、レポートを確認した
+- 初期診断対象をCase 5、6、8、10、11とし、任意の`RetrievalEvaluationCase`を渡せる設計を維持した
+
+### 今回変更していないもの
+
+本番Chunker、実験用Heading-aware Chunker、Retriever、Embedder、RAGサービス、CLI、chunk_size、overlap、埋め込みモデル、本番top_kは変更していない。Chunkingアルゴリズムの改善やCandidateの再採用も行っていない。
+
+### 実PDF診断結果
+
+- Case 8ではheading boundaryによるFigure／Table由来ノイズとsection本文の分離が有効だった
+- p.26ではグラフ軸目盛りの`0.7`、`0.6`、`0.5`がnumber-only headingとして誤検出され、それぞれ3文字の極小Chunkになっていた
+- 現在のregexでは`.`はすでにliteral periodとしてエスケープされており、number-only判定が小数値そのものを許容することがfalse positiveの原因だった
+- 極小ChunkによってChunk数と検索ランキングが不要に変化している可能性が高いと判断した
+- Case 11はrank 3からrank 4程度への変化であり、文脈破壊だけを原因と断定できないと記録した
+- Issue 012では診断結果だけを記録し、Chunkingおよびheading detectionの実装は変更しなかった
+
+### 次の段階
+
+Chunking戦略を変えず、heading detectionのfalse positiveだけを改善する比較実験を行う。
