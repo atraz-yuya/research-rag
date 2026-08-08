@@ -456,6 +456,60 @@ heading detectorのfalse positive修正は有効であり、Candidate v2はCandi
 
 次のIssueではBaselineとCandidate v2についてCase 3、5、6のfull rankingとrelevant page Chunk構造を比較し、正しいheading boundary自体がretrievalを悪化させる理由を診断する。
 
+## Issue 014: Strict Heading Regression Diagnosis
+
+### 目的
+
+Candidate v2はnumeric headingのfalse positiveを大幅に抑制したが、BaselineよりHit@3とMRRが低い。新しいChunkerや検索改善は導入せず、BaselineとCandidate v2のfull rankingおよび正解ページのChunk境界を並べ、Case 3、5、6のregressionとCase 8の改善を観察する。
+
+診断対象は最初にCase 3、5、6、8とするが、診断runnerは任意の`RetrievalEvaluationCase`を受け取れる。実PDFによる診断結果と結論は、実行後に別途記録する。
+
+### 診断内容
+
+各ケースについて、BaselineとCandidate v2の次の情報を比較する。
+
+- full rankingから求めたfirst relevant rankとbest relevant score
+- rank、PDF名、ページ番号、chunk index、score、文字数、本文、`starts_with_heading`を含むTop 5
+- relevant page上に生成された全Chunkと、それぞれのfull ranking上のrankおよびscore
+- BaselineとCandidate v2のChunk本文を並べた境界比較
+
+full rankingは既存`retrieve_similar_chunks`へ`top_k=len(embedded_chunks)`を渡して取得する。コサイン類似度は再実装しない。`starts_with_heading`は診断側からCandidate v2のheading detectorを利用して、Chunk先頭がstrict numbered headingとして認識されるかを記録する。productionの`Chunk`モデルには診断用metadataを追加しない。
+
+PDF extractionは1回だけ行う。BaselineとCandidate v2のChunk embeddingはvariantごとに1回生成する。質問embeddingは1ケースにつき1回だけ生成し、その同じベクトルを両variantの検索へ渡す。
+
+```python
+from pathlib import Path
+
+from research_rag.evaluation_runner import BASELINE_EVALUATION_CASES
+from research_rag.strict_heading_diagnostics import (
+    format_strict_heading_diagnostics_report,
+    run_strict_heading_diagnostics,
+)
+
+diagnostic_cases = (
+    BASELINE_EVALUATION_CASES[2],  # Case 3
+    BASELINE_EVALUATION_CASES[4],  # Case 5
+    BASELINE_EVALUATION_CASES[5],  # Case 6
+    BASELINE_EVALUATION_CASES[7],  # Case 8
+)
+report = run_strict_heading_diagnostics(
+    Path("/path/to/文献レビューと実験的評価.pdf"),
+    diagnostic_cases,
+    embedding_model="qwen3-embedding:0.6b",
+    top_n=5,
+)
+print(format_strict_heading_diagnostics_report(report))
+```
+
+### 観察する仮説
+
+- 仮説A: Case 8ではheading boundaryによってFigure／Tableノイズが正解本文から分離され、embeddingが改善した。
+- 仮説B: Case 3、5、6ではBaselineのoverlapや前後文脈が有効だったが、heading hard boundaryによって失われた。
+- 仮説C: Candidate v2が意味的に正しいsectionを作っていても、Chunkが短くなったことでqueryとのsemantic similarityが下がった。
+- 仮説D: 正解Chunkのscore低下ではなく、競合Chunkのscore上昇によって順位が下がった。
+
+診断コードはこれらの仮説を結論として扱わない。Top 5、正解Chunkの全体順位とscore、relevant pageのChunk本文・長さ・境界を人間が比較し、次の変更対象を証拠から決めるための観測情報だけを提供する。
+
 ### 予備観測
 
 - PDF名: `文献レビューと実験的評価.pdf`（ローカルのみ）

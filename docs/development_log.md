@@ -346,3 +346,25 @@ Chunking戦略を変えず、heading detectionのfalse positiveだけを改善�
 ### 次の段階
 
 BaselineとCandidate v2についてCase 3、5、6のfull rankingとrelevant page Chunk構造を比較し、正しいheading boundary自体によるregressionを診断する。
+
+## Issue 014: Strict Heading Regression Diagnosis
+
+実施日: 2026-08-08
+
+### 実施内容
+
+- BaselineとCandidate v2のfull ranking、Top 5、first relevant rank、best relevant scoreを比較する診断モジュールを追加した
+- relevant page上の全Chunkについて、full ranking上のrank、score、chunk index、文字数、本文を並べられるようにした
+- Candidate v2の既存heading detectorを診断側で再利用し、Chunk先頭の`starts_with_heading`を記録するようにした
+- PDF extractionを1回、Baseline／Candidate v2のChunk embeddingを各1回とし、各質問のembeddingを両variantの検索で共有するrunnerを追加した
+- 既存Retrieverへvariantごとの全Chunk件数を`top_k`として渡し、コサイン類似度を再実装せずfull rankingを取得するようにした
+- 実PDFとOllamaを使わない単体テストで、Top 5外の正解順位、正解ページの全Chunk、処理回数、query embeddingの同一性、入力検証、比較レポートを確認した
+- 初期診断対象をCase 3、5、6、8としつつ、任意の`RetrievalEvaluationCase`を扱える設計にした
+
+### 今回変更していないもの
+
+本番Chunker、Candidate v1、Candidate v2、Retriever、Embedder、RAGサービス、CLI、chunk_size、overlap、top_k、埋め込みモデルは変更していない。新しいChunking戦略や検索精度改善は導入していない。
+
+### 次の段階
+
+実PDFでCase 3、5、6、8を診断し、見出し境界による本文移動、overlapの消失、Chunk短縮、競合Chunkのscore変化を比較して、次の改善実験で変更する要因を1つに絞る。
