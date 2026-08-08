@@ -206,3 +206,25 @@ Retriever、埋め込みモデル、chunk_size、overlap、RAGサービス、回
 ### 次のIssue
 
 複数の評価ケースを実PDFで測定し、そのHit率、MRR、失敗例に基づいてRetrieverの改善方法を決定する。
+
+## Issue 009: 実PDF用baseline evaluation runner
+
+実施日: 2026-08-08
+
+### 実施内容
+
+- Issue 008の評価ロジックをPDF Reader、Chunker、Embedder、Retrieverへ接続するbaseline runnerを追加した
+- 同一PDFの読み込み、Chunk分割、文書Chunk embeddingを1回だけ実行し、全評価ケースで再利用する設計にした
+- 各質問は個別にembeddingし、既存Retrieverの上位3件を`evaluate_retrieval`へ渡すようにした
+- ケースごとのquestion、正解ページ、取得ページ、first relevant rank、Hit@1、Hit@3と、集計したHit@1率、Hit@3率、MRRを整形して表示できるようにした
+- 実PDFで確認した12件のbaselineケースを追加し、実行前に1始まりのページ対応を人間が確認できる形で文書化した
+- 通常テストではfakeを使用し、実PDFとOllamaを必要としないようにした
+- LLM回答生成は接続せず、Ollamaは質問と文書のembedding生成だけに使用する設計を維持した
+
+### 今回変更していないもの
+
+Retriever、コサイン類似度、embeddingモデル、chunk_size、overlap、RAG回答生成、CLIは変更していない。実PDFもGitへ追加していない。
+
+### 次の段階
+
+確定した12ケースでbaseline runnerを実行し、Hit@1、Hit@3、MRRと失敗例を記録する。
