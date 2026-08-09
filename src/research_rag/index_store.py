@@ -13,7 +13,8 @@ from pathlib import Path
 from .models import Chunk, EmbeddedChunk, RagIndex
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
+MAX_DISPLAY_NAME_LENGTH = 100
 
 
 class RagIndexStoreError(RuntimeError):
@@ -52,6 +53,7 @@ class StoredRagIndexMetadata:
     created_at: str
     documents: tuple[StoredDocumentMetadata, ...]
     chunk_count: int
+    display_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -71,7 +73,7 @@ class SQLiteRagIndexStore:
         self.db_path = db_path
 
     def initialize(self) -> None:
-        """Create schema v2 or transactionally migrate schema v1."""
+        """Create schema v3 or transactionally migrate schema v1/v2."""
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
         with closing(self._open_connection()) as connection:
@@ -90,13 +92,24 @@ class SQLiteRagIndexStore:
                     ("schema_version",),
                 ).fetchone()
                 if row is None:
-                    self._create_schema_v2(connection)
+                    self._create_schema_v3(connection)
                     connection.execute(
                         "INSERT INTO store_metadata (key, value) VALUES (?, ?)",
                         ("schema_version", str(SCHEMA_VERSION)),
                     )
                 elif row["value"] == "1":
                     self._migrate_v1_to_v2(connection)
+                    self._migrate_v2_to_v3(connection)
+                    connection.execute(
+                        """
+                        UPDATE store_metadata
+                        SET value = ?
+                        WHERE key = ?
+                        """,
+                        (str(SCHEMA_VERSION), "schema_version"),
+                    )
+                elif row["value"] == "2":
+                    self._migrate_v2_to_v3(connection)
                     connection.execute(
                         """
                         UPDATE store_metadata
@@ -106,7 +119,7 @@ class SQLiteRagIndexStore:
                         (str(SCHEMA_VERSION), "schema_version"),
                     )
                 elif row["value"] == str(SCHEMA_VERSION):
-                    self._create_schema_v2(connection)
+                    self._create_schema_v3(connection)
                 else:
                     self._raise_unsupported_schema(row["value"])
             except BaseException:
@@ -119,18 +132,32 @@ class SQLiteRagIndexStore:
         self,
         index: RagIndex,
         source_paths: Sequence[Path],
+        *,
+        display_name: str | None = None,
     ) -> StoredRagIndexMetadata:
         """Save a prebuilt index without claiming trusted file fingerprints."""
-        return self._save_index(index, source_paths, fingerprints=None)
+        return self._save_index(
+            index,
+            source_paths,
+            fingerprints=None,
+            display_name=display_name,
+        )
 
     def save_verified_index(
         self,
         index: RagIndex,
         source_paths: Sequence[Path],
         fingerprints: Sequence[SourceFingerprint],
+        *,
+        display_name: str | None = None,
     ) -> StoredRagIndexMetadata:
         """Save an index with fingerprints verified around document building."""
-        return self._save_index(index, source_paths, fingerprints=fingerprints)
+        return self._save_index(
+            index,
+            source_paths,
+            fingerprints=fingerprints,
+            display_name=display_name,
+        )
 
     def _save_index(
         self,
@@ -138,7 +165,9 @@ class SQLiteRagIndexStore:
         source_paths: Sequence[Path],
         *,
         fingerprints: Sequence[SourceFingerprint] | None,
+        display_name: str | None,
     ) -> StoredRagIndexMetadata:
+        normalized_display_name = _normalize_display_name(display_name)
         normalized_paths = self._validate_source_paths(index, source_paths)
         verified_fingerprints = self._validate_fingerprints(
             fingerprints,
@@ -193,11 +222,17 @@ class SQLiteRagIndexStore:
                         """
                         INSERT INTO rag_indexes (
                             index_id,
+                            display_name,
                             embedding_model,
                             created_at
-                        ) VALUES (?, ?, ?)
+                        ) VALUES (?, ?, ?, ?)
                         """,
-                        (index_id, index.embedding_model, created_at),
+                        (
+                            index_id,
+                            normalized_display_name,
+                            index.embedding_model,
+                            created_at,
+                        ),
                     )
                     connection.executemany(
                         """
@@ -245,6 +280,7 @@ class SQLiteRagIndexStore:
             created_at=created_at,
             documents=documents,
             chunk_count=len(prepared_chunks),
+            display_name=normalized_display_name,
         )
 
     def load_index(self, index_id: str) -> RagIndex:
@@ -348,12 +384,17 @@ class SQLiteRagIndexStore:
                 """
                 SELECT
                     i.index_id,
+                    i.display_name,
                     i.embedding_model,
                     i.created_at,
                     COUNT(c.chunk_id) AS chunk_count
                 FROM rag_indexes AS i
                 LEFT JOIN rag_chunks AS c ON c.index_id = i.index_id
-                GROUP BY i.index_id, i.embedding_model, i.created_at
+                GROUP BY
+                    i.index_id,
+                    i.display_name,
+                    i.embedding_model,
+                    i.created_at
                 ORDER BY i.created_at DESC, i.index_id ASC
                 """
             ).fetchall()
@@ -389,6 +430,7 @@ class SQLiteRagIndexStore:
                 created_at=row["created_at"],
                 documents=tuple(documents_by_index[row["index_id"]]),
                 chunk_count=row["chunk_count"],
+                display_name=row["display_name"],
             )
             for row in index_rows
         )
@@ -402,13 +444,18 @@ class SQLiteRagIndexStore:
                 """
                 SELECT
                     i.index_id,
+                    i.display_name,
                     i.embedding_model,
                     i.created_at,
                     COUNT(c.chunk_id) AS chunk_count
                 FROM rag_indexes AS i
                 LEFT JOIN rag_chunks AS c ON c.index_id = i.index_id
                 WHERE i.index_id = ?
-                GROUP BY i.index_id, i.embedding_model, i.created_at
+                GROUP BY
+                    i.index_id,
+                    i.display_name,
+                    i.embedding_model,
+                    i.created_at
                 """,
                 (clean_index_id,),
             ).fetchone()
@@ -444,7 +491,43 @@ class SQLiteRagIndexStore:
                 for row in document_rows
             ),
             chunk_count=index_row["chunk_count"],
+            display_name=index_row["display_name"],
         )
+
+    def rename_index(
+        self,
+        index_id: str,
+        display_name: str,
+    ) -> StoredRagIndexMetadata:
+        """Atomically update presentation metadata without touching RAG data."""
+        clean_index_id = _require_uuid(index_id, field_name="index_id")
+        clean_display_name = _normalize_display_name(display_name)
+        if clean_display_name is None:
+            raise ValueError("display_name must not be None when renaming")
+
+        with closing(self._open_connection()) as connection:
+            self._require_supported_schema(connection)
+            try:
+                with connection:
+                    cursor = connection.execute(
+                        """
+                        UPDATE rag_indexes
+                        SET display_name = ?
+                        WHERE index_id = ?
+                        """,
+                        (clean_display_name, clean_index_id),
+                    )
+                    if cursor.rowcount == 0:
+                        raise KeyError(
+                            "Stored RAG index does not exist: "
+                            f"{clean_index_id}"
+                        )
+            except sqlite3.Error as exc:
+                raise RagIndexStoreError(
+                    f"Failed to rename RAG index: {clean_index_id}"
+                ) from exc
+
+        return self.get_index_metadata(clean_index_id)
 
     def append_document(
         self,
@@ -711,11 +794,12 @@ class SQLiteRagIndexStore:
         return connection
 
     @staticmethod
-    def _create_schema_v2(connection: sqlite3.Connection) -> None:
+    def _create_schema_v3(connection: sqlite3.Connection) -> None:
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS rag_indexes (
                 index_id TEXT PRIMARY KEY,
+                display_name TEXT NULL,
                 embedding_model TEXT NOT NULL,
                 created_at TEXT NOT NULL
             )
@@ -835,6 +919,12 @@ class SQLiteRagIndexStore:
             """
         )
         connection.execute("DROP TABLE rag_chunks_v1")
+
+    @staticmethod
+    def _migrate_v2_to_v3(connection: sqlite3.Connection) -> None:
+        connection.execute(
+            "ALTER TABLE rag_indexes ADD COLUMN display_name TEXT NULL"
+        )
 
     def _require_supported_schema(
         self,
@@ -1269,6 +1359,23 @@ def _require_uuid(value: str, *, field_name: str) -> str:
     except ValueError as exc:
         raise ValueError(f"{field_name} must be a valid UUID") from exc
     return str(parsed_id)
+
+
+def _normalize_display_name(display_name: str | None) -> str | None:
+    """Normalize an optional corpus label shared by save and rename writes."""
+    if display_name is None:
+        return None
+    if not isinstance(display_name, str):
+        raise TypeError("display_name must be a string or None")
+    clean_name = display_name.strip()
+    if not clean_name:
+        raise ValueError("display_name must not be empty")
+    if len(clean_name) > MAX_DISPLAY_NAME_LENGTH:
+        raise ValueError(
+            "display_name must be "
+            f"{MAX_DISPLAY_NAME_LENGTH} characters or fewer"
+        )
+    return clean_name
 
 
 def _utc_now_iso8601() -> str:

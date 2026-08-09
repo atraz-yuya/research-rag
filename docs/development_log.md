@@ -605,3 +605,25 @@ GUI foundationを実機で検証し、必要に応じて資料セット名の編
 - test session全体で1つの`QApplication` strong referenceを維持したまま、各test後にGUI threadでtop-level widgetをcloseし、必要なwidgetへ`deleteLater()`を発行し、`sendPostedEvents(..., DeferredDelete)`でC++ treeを削除してからPython GCを行う共通fixtureを追加した。`shiboken6.delete()`は使用していない
 - RAGなしwidget tree 100回、実MainWindow 50回、worker success／failure／active close／完了直後closeをdeterministicに削除するregressionを追加し、MainWindowとchild wrapperのweak referenceがGC後に残らないことも確認した
 - faulthandler付きfocused suite 27件を成功させ、同じsuiteをfresh processで30回連続実行してQWidget／QLabel teardown crashが再発しないことを確認した
+
+## Issue 023: Add named corpus management and deletion
+
+実施日: 2026-08-10
+
+### 実施内容
+
+- SQLite schemaをversion 3へ更新し、`rag_indexes`へnullableな`display_name`を追加した。新規DBはv3を直接作成し、既存v1／v2 DBは1つのtransaction内でv1→v2→v3の順に移行する
+- migrationでは既存index／document／chunk／embedding／fingerprint／UUID／順序／timestampを維持し、移行済みcorpusの`display_name`はNULLのままとした。途中失敗時はversionを進めず全DDLをrollbackする
+- 低水準save APIを互換維持したままoptionalな表示名を同じsave transactionで保存できるようにし、`PersistentRagDocumentManager.create_index()`からverified indexと名前をatomicに作成できるようにした
+- 表示名は前後空白を除去し、空文字と100 Unicode文字超を拒否する。`rename_index()`は1 transactionの軽量metadata更新だけを行い、重複名を許可し、index／document UUIDとembeddingを変更・復元しない
+- `RagGuiService`へ名前付き作成、rename、corpus全体削除を追加し、Widget内へSQLやRAG処理を持ち込まなかった
+- GUIでは永続表示名を優先し、名前がない既存corpusは従来のPDF名ベースラベルへfallbackする。UUIDはQt item dataだけに保持する
+- `新しい資料セット`でPDF選択後に先頭PDFのstemを初期値として名前を入力し、`名前を変更`と`資料セットを削除`を追加した。削除確認ではSQLite内の索引データだけを削除し、元PDFを削除しないことを明示する
+- corpus削除は既存worker経由で実行し、残るcorpusを決定的に選択する。最後のcorpus削除後は文書・回答・参照と依存操作を空状態へ戻す。失敗時は選択と入力を保ってUIを復帰する
+- migration／display name保存／rename identity／duplicate name／embedding非更新／service delegation／dialog cancel／UUID選択／削除確認／空状態／失敗復帰の単体テストを追加した
+- `QT_QPA_PLATFORM=offscreen`の全suite 371件を成功させた。faulthandler付きworker／MainWindow focused suite 37件をfresh processで5回連続実行し、native crashとteardown errorが再発しないことを確認した
+- Git管理外の一時DB、3つの小型text PDF、ローカルOllama、実際のMainWindow／Qt workerで、2-PDF corpus `研究資料 A`作成→再起動後の名前保持→`研究資料 B`へrename→同じID・document ID・RAG内容の保持→質問→同名の第2 corpus作成→順次削除→最後の削除後の空表示→再起動後も空、を確認した。corpus削除後も3つの元PDFは存在した
+
+### 互換性と安全性
+
+既存CLI syntax、PDF Reader、production Chunker、Embedder、Retriever、RAG service、生成prompt、モデル既定値、duplicate basename ruleは変更していない。新しい外部依存も追加していない。Issue 022の`QtTaskRunner`、close延期、session-level `QApplication`、deterministic DeferredDelete fixture、native crash regression testを維持し、nested `QEventLoop.exec()`や`shiboken6.delete()`は追加していない。

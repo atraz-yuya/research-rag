@@ -110,6 +110,7 @@ class PersistentRagDocumentManager:
         pdf_paths: Sequence[Path],
         *,
         embedding_model: str,
+        display_name: str | None = None,
     ) -> StoredRagIndexMetadata:
         """Build and atomically save a new corpus with verified fingerprints."""
         clean_embedding_model = embedding_model.strip()
@@ -124,7 +125,12 @@ class PersistentRagDocumentManager:
         )
         after = tuple(fingerprint_source_file(path) for path in paths)
         _require_unchanged_sources(paths, before, after)
-        return self.store.save_verified_index(index, paths, after)
+        return self.store.save_verified_index(
+            index,
+            paths,
+            after,
+            display_name=display_name,
+        )
 
     def inspect_documents(
         self,

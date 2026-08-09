@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -32,6 +33,9 @@ from .gui_service import RagGuiService, format_corpus_label
 from .gui_worker import QtTaskRunner, TaskRunner
 from .index_store import StoredRagIndexMetadata
 from .models import RagAnswer
+
+
+_CORPUS_DISPLAY_NAME_ROLE = int(Qt.ItemDataRole.UserRole) + 1
 
 
 class MainWindow(QMainWindow):
@@ -83,6 +87,14 @@ class MainWindow(QMainWindow):
         self.new_corpus_button = QPushButton("新しい資料セット", panel)
         self.new_corpus_button.setObjectName("newCorpusButton")
         layout.addWidget(self.new_corpus_button)
+        corpus_actions = QHBoxLayout()
+        self.rename_corpus_button = QPushButton("名前を変更", panel)
+        self.rename_corpus_button.setObjectName("renameCorpusButton")
+        self.delete_corpus_button = QPushButton("資料セットを削除", panel)
+        self.delete_corpus_button.setObjectName("deleteCorpusButton")
+        corpus_actions.addWidget(self.rename_corpus_button)
+        corpus_actions.addWidget(self.delete_corpus_button)
+        layout.addLayout(corpus_actions)
         return panel
 
     def _build_document_panel(self) -> QWidget:
@@ -158,6 +170,8 @@ class MainWindow(QMainWindow):
         self.question_input.textChanged.connect(self._update_action_states)
         self.question_input.returnPressed.connect(self.ask_question)
         self.new_corpus_button.clicked.connect(self.create_corpus)
+        self.rename_corpus_button.clicked.connect(self.rename_corpus)
+        self.delete_corpus_button.clicked.connect(self.delete_corpus)
         self.add_document_button.clicked.connect(self.add_document)
         self.reindex_button.clicked.connect(self.reindex_document)
         self.remove_button.clicked.connect(self.remove_document)
@@ -181,7 +195,7 @@ class MainWindow(QMainWindow):
         if self.selected_index_id() is not None:
             self.refresh_documents()
         else:
-            self._clear_documents()
+            self._clear_selected_corpus_state()
             self._update_action_states()
 
     def _populate_corpora(
@@ -195,6 +209,10 @@ class MainWindow(QMainWindow):
         for row, metadata in enumerate(corpora):
             item = QListWidgetItem(format_corpus_label(metadata))
             item.setData(Qt.ItemDataRole.UserRole, metadata.index_id)
+            item.setData(
+                _CORPUS_DISPLAY_NAME_ROLE,
+                metadata.display_name,
+            )
             item.setToolTip(
                 f"資料数: {len(metadata.documents)} / Chunk数: {metadata.chunk_count}"
             )
@@ -265,17 +283,80 @@ class MainWindow(QMainWindow):
     def _clear_documents(self) -> None:
         self.document_table.setRowCount(0)
 
+    def _clear_selected_corpus_state(self) -> None:
+        self._clear_documents()
+        self.answer_output.clear()
+        self.sources_output.clear()
+
     def create_corpus(self) -> None:
         selected_paths = self._choose_corpus_pdfs()
         if not selected_paths:
             return
+        display_name = self._choose_corpus_name(
+            title="資料セット名",
+            initial_value=selected_paths[0].stem,
+        )
+        if display_name is None:
+            return
+        clean_display_name = display_name.strip()
+        if not clean_display_name:
+            self._show_warning("資料セット名を入力してください。")
+            return
 
         self._run_task(
-            lambda: self.service.create_corpus(selected_paths),
+            lambda: self.service.create_corpus(
+                selected_paths,
+                display_name=clean_display_name,
+            ),
             on_success=lambda _: None,
             after_success=lambda metadata: self.refresh_corpora(metadata.index_id),
             busy_message="資料セットを作成中...",
         )
+
+    def rename_corpus(self) -> None:
+        index_id = self.selected_index_id()
+        item = self.corpus_list.currentItem()
+        if index_id is None or item is None:
+            self._show_warning("資料セットを選択してください。")
+            return
+        display_name = self._choose_corpus_name(
+            title="資料セット名を変更",
+            initial_value=item.text(),
+        )
+        if display_name is None:
+            return
+        clean_display_name = display_name.strip()
+        if not clean_display_name:
+            self._show_warning("資料セット名を入力してください。")
+            return
+        current_display_name = item.data(_CORPUS_DISPLAY_NAME_ROLE)
+        if current_display_name == clean_display_name:
+            return
+        self._run_task(
+            lambda: self.service.rename_corpus(index_id, clean_display_name),
+            on_success=lambda _: None,
+            after_success=lambda _: self.refresh_corpora(index_id),
+            busy_message="資料セット名を変更中...",
+        )
+
+    def delete_corpus(self) -> None:
+        index_id = self.selected_index_id()
+        item = self.corpus_list.currentItem()
+        if index_id is None or item is None:
+            self._show_warning("資料セットを選択してください。")
+            return
+        if not self._confirm_corpus_deletion(item.text()):
+            return
+        self._run_task(
+            lambda: self.service.delete_corpus(index_id),
+            on_success=lambda _: None,
+            after_success=lambda _: self._after_corpus_deleted(),
+            busy_message="資料セットを削除中...",
+        )
+
+    def _after_corpus_deleted(self) -> None:
+        self._clear_selected_corpus_state()
+        self.refresh_corpora()
 
     def add_document(self) -> None:
         index_id = self.selected_index_id()
@@ -419,6 +500,8 @@ class MainWindow(QMainWindow):
             self.corpus_list,
             self.document_table,
             self.new_corpus_button,
+            self.rename_corpus_button,
+            self.delete_corpus_button,
             self.add_document_button,
             self.reindex_button,
             self.remove_button,
@@ -436,6 +519,8 @@ class MainWindow(QMainWindow):
         has_document = self.selected_document_id() is not None
         has_question = bool(self.question_input.text().strip())
         self.new_corpus_button.setEnabled(True)
+        self.rename_corpus_button.setEnabled(has_corpus)
+        self.delete_corpus_button.setEnabled(has_corpus)
         self.add_document_button.setEnabled(has_corpus)
         self.refresh_button.setEnabled(has_corpus)
         self.reindex_button.setEnabled(has_corpus and has_document)
@@ -460,11 +545,38 @@ class MainWindow(QMainWindow):
         )
         return Path(filename) if filename else None
 
+    def _choose_corpus_name(
+        self,
+        *,
+        title: str,
+        initial_value: str,
+    ) -> str | None:
+        value, accepted = QInputDialog.getText(
+            self,
+            title,
+            "名前",
+            QLineEdit.EchoMode.Normal,
+            initial_value,
+        )
+        return value if accepted else None
+
     def _confirm_document_removal(self, document_name: str) -> bool:
         result = QMessageBox.question(
             self,
             "資料を削除",
             f"{document_name} を資料セットから削除しますか？\n\n"
+            "元のPDFファイルは削除されません。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return result is QMessageBox.StandardButton.Yes
+
+    def _confirm_corpus_deletion(self, corpus_name: str) -> bool:
+        result = QMessageBox.question(
+            self,
+            "資料セットを削除",
+            f"{corpus_name} の索引データをすべて削除しますか？\n\n"
+            "アプリ内の文書・Chunk・embeddingが削除されます。\n"
             "元のPDFファイルは削除されません。",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
