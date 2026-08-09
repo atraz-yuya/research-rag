@@ -399,3 +399,32 @@ Candidate v3はCandidate v2よりHit@3とMRRが低いため、本番Chunkerへ�
 ### 次の段階
 
 headingを一律に反復する案から離れ、Case 3の競合Chunk、Case 5／6のcross-lingualまたはscope条件、Case 11の新規regressionを証拠に基づいて切り分ける。
+
+## Issue 016: Diagnose query-language and scope sensitivity in dense retrieval
+
+実施日: 2026-08-09
+
+### 実施内容
+
+- 任意の`RetrievalEvaluationCase`と複数のquery variantを受け取る診断専用モジュールを追加した
+- 各variantについてfull ranking、first relevant rank、best relevant score、Hit@3、Top 5、relevant page上の全Chunkを保持し、基準variantとの差分を表示できるようにした
+- PDF extraction、Baseline Chunk分割、文書Chunk embeddingを各1回だけ行い、各query variantを1回ずつembeddingするrunnerを追加した
+- 既存Retrieverへ`top_k=len(embedded_chunks)`を渡し、コサイン類似度を再実装せずfull rankingを取得した
+- 実PDFとOllamaを使わない単体テストで、処理回数、full ranking、Top 5差分、入力検証、レポートを確認した
+- 実PDFのCase 4、5、6、8について`original_ja`、`english_equivalent`、`concise_scope_preserving_en`を比較した
+
+### 実PDF診断結果
+
+- Case 4は英語化でdirect-answer Chunkがrank 24から14へ改善したが、英語でもTop 5外であり、scope条件の識別問題が残った
+- Case 5は簡潔な英語でdirect-answer Chunkがrank 1になった一方、忠実な英訳ではrank 4であり、英語化だけでは一貫した改善にならなかった
+- Case 6は英語化でdirect-answer scoreが上昇したがrank 2から5へ悪化し、競合Chunkのscore変化が順位へ影響した
+- Case 8は忠実な英訳でrank 7から6への小幅改善に留まり、簡潔な英語ではrank 7だった
+- page-level first relevant rankとdirect-answer Chunkのrankが異なるCase 5、および理由がchunk 2／3の境界にまたがるCase 6を明示的に区別して記録した
+
+### 今回変更していないもの
+
+本番Chunker、Candidate v1／v2／v3、Retriever、Embedder、RAGサービス、CLI、chunk_size、overlap、production top_k、embedding model default、回答生成は変更していない。translation、query rewriting、reranking、hybrid retrievalもproductionへ追加していない。
+
+### 次の段階
+
+query-languageだけでは順位改善が一貫しなかったため、scope条件、競合Chunk、Chunk contaminationを分け、Baselineとの比較で1要因ずつ検証する。

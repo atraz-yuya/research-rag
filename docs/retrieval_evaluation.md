@@ -610,3 +610,82 @@ Candidate v3はCandidate v2より全体性能が低いため、本番Chunkerと�
 - global questionとlocal retrievalの役割分担
 
 次のIssueでは、複数のlocal questionとglobal questionを分けて測定し、指標と失敗例に基づいて改善対象を選ぶ。
+
+## Issue 016: Query-language and scope sensitivity diagnosis
+
+### 目的と実行条件
+
+productionの検索挙動を変更せず、質問の言語とscope表現だけがdense retrievalの順位へ与える影響を観察した。実PDFのCase 4、5、6、8について、次の3 variantを比較した。
+
+- `original_ja`: Baseline v1の日本語質問
+- `english_equivalent`: 制約と意味を保った英訳
+- `concise_scope_preserving_en`: 条件を残した短い英語表現
+
+実行にはローカルの`文献レビューと実験的評価.pdf`と`qwen3-embedding:0.6b`を使用した。PDF extraction、Baseline Chunkerによる分割、204件の文書Chunk embeddingはそれぞれ1回だけ行い、12個のquery variantは個別に1回ずつembeddingした。各queryは既存`retrieve_similar_chunks()`へ`top_k=204`として渡し、full rankingからfirst relevant rank、best relevant score、Top 5、relevant page上の全Chunkを取得した。回答生成LLMは使用していない。
+
+### 使用したquery variant
+
+| Case | Variant | Query |
+| ---: | --- | --- |
+| 4 | `original_ja` | 文献レビューの83本の非レビュー論文について、最も多く利用されている学習方法は何ですか？ |
+| 4 | `english_equivalent` | Among the 83 non-review papers in the literature review, which learning method is used most frequently? |
+| 4 | `concise_scope_preserving_en` | Across all 83 non-review papers, which learning method is used most frequently? |
+| 5 | `original_ja` | 2018年以降に利用が増え始めたネットワーク分析手法は何ですか？ |
+| 5 | `english_equivalent` | Which network analysis methods began to be used more frequently from 2018 onward? |
+| 5 | `concise_scope_preserving_en` | Which network methods increased in use from 2018 onward? |
+| 6 | `original_ja` | AUC-PRがAUC-ROCよりAMLの評価に適している理由は何ですか？ |
+| 6 | `english_equivalent` | Why is AUC-PR more suitable than AUC-ROC for evaluating AML? |
+| 6 | `concise_scope_preserving_en` | Why prefer AUC-PR over AUC-ROC in AML evaluation? |
+| 8 | `original_ja` | 実験評価ではどの2つのデータセットを使用していますか？ |
+| 8 | `english_equivalent` | Which two data sets are used in the experimental evaluation? |
+| 8 | `concise_scope_preserving_en` | Which two datasets are used in the experiment? |
+
+### 実測結果
+
+`best relevant score`はrelevant pageに属する全Chunkの最大scoreであり、質問へ直接回答するChunkのscoreとは一致しない場合がある。
+
+| Case | Relevant pages | Variant | First relevant rank | Best relevant score | Hit@3 | Top 5 pages |
+| ---: | --- | --- | ---: | ---: | --- | --- |
+| 4 | `(9,)` | `original_ja` | `24` | `0.361770` | `False` | `(2, 12, 12, 4, 7)` |
+| 4 | `(9,)` | `english_equivalent` | `14` | `0.503058` | `False` | `(2, 12, 6, 4, 7)` |
+| 4 | `(9,)` | `concise_scope_preserving_en` | `14` | `0.500292` | `False` | `(2, 12, 6, 6, 4)` |
+| 5 | `(9,)` | `original_ja` | `2` | `0.510878` | `True` | `(19, 9, 9, 2, 17)` |
+| 5 | `(9,)` | `english_equivalent` | `2` | `0.617590` | `True` | `(19, 9, 2, 9, 17)` |
+| 5 | `(9,)` | `concise_scope_preserving_en` | `1` | `0.506914` | `True` | `(9, 19, 9, 2, 9)` |
+| 6 | `(23,)` | `original_ja` | `2` | `0.592461` | `True` | `(29, 23, 28, 23, 24)` |
+| 6 | `(23,)` | `english_equivalent` | `5` | `0.611624` | `False` | `(29, 28, 27, 24, 23)` |
+| 6 | `(23,)` | `concise_scope_preserving_en` | `5` | `0.630956` | `False` | `(29, 28, 27, 24, 23)` |
+| 8 | `(20,)` | `original_ja` | `7` | `0.435093` | `False` | `(29, 12, 4, 11, 11)` |
+| 8 | `(20,)` | `english_equivalent` | `6` | `0.546377` | `False` | `(29, 4, 12, 11, 17)` |
+| 8 | `(20,)` | `concise_scope_preserving_en` | `7` | `0.477123` | `False` | `(29, 12, 31, 11, 17)` |
+
+### Direct-answer Chunk
+
+relevant pageが初めて現れる順位と、実際に質問へ直接回答する本文を含むChunkの順位を分けて確認した。
+
+| Case | Direct-answer Chunk | Variant | Full rank | Score |
+| ---: | --- | --- | ---: | ---: |
+| 4 | p.9 / chunk 3 | `original_ja` | `24` | `0.361770` |
+| 4 | p.9 / chunk 3 | `english_equivalent` | `14` | `0.503058` |
+| 4 | p.9 / chunk 3 | `concise_scope_preserving_en` | `14` | `0.500292` |
+| 5 | p.9 / chunk 5 | `original_ja` | `3` | `0.501974` |
+| 5 | p.9 / chunk 5 | `english_equivalent` | `4` | `0.606418` |
+| 5 | p.9 / chunk 5 | `concise_scope_preserving_en` | `1` | `0.506914` |
+| 6 | p.23 / chunk 3 | `original_ja` | `2` | `0.592461` |
+| 6 | p.23 / chunk 3 | `english_equivalent` | `5` | `0.611624` |
+| 6 | p.23 / chunk 3 | `concise_scope_preserving_en` | `5` | `0.630956` |
+| 8 | p.20 / chunk 0 | `original_ja` | `7` | `0.435093` |
+| 8 | p.20 / chunk 0 | `english_equivalent` | `6` | `0.546377` |
+| 8 | p.20 / chunk 0 | `concise_scope_preserving_en` | `7` | `0.477123` |
+
+Case 6の理由説明はBaselineの境界上にあり、p.23 / chunk 2が不均衡データでAUC-ROCのfalse-positive rateが過小に見える理由を含み、p.23 / chunk 3がAUC-PRの適合性を明示する。chunk 2のrank／scoreは`original_ja=8 / 0.540168`、`english_equivalent=14 / 0.576299`、`concise_scope_preserving_en=15 / 0.595144`だった。
+
+### 観察
+
+- Case 4は英語化によりdirect-answer Chunkがrank 24から14へ、scoreが`0.361770`から約`0.50`へ改善した。しかし全variantでTop 5外であり、短文化してもrank 14から改善しなかった。p.2やp.12など、literature reviewやmethodsを含むが「83 non-review papers」というscopeへ直接回答しないChunkが引き続き上位を占めた。cross-lingual sensitivityは存在するが、scope識別の弱さも残っている。
+- Case 5はpage-level first relevant rankだけを見ると日本語と忠実な英訳がともにrank 2だが、そのChunkは直接回答Chunkではない。direct-answerのp.9 / chunk 5はrank 3から英訳でrank 4へ下がった一方、簡潔な英語ではrank 1になった。短い表現が有効な例だが、英語化だけで一貫して改善するわけではない。
+- Case 6は英語化でdirect-answer scoreが上昇したにもかかわらず、rankは2から5へ悪化した。p.27〜29やp.24のAUC指標表・結論Chunkのscoreも上がり、Top 5の競合構成が変化したためである。正解Chunk自体のscoreだけでは順位変化を説明できない。
+- Case 8は忠実な英訳でrank 7から6、scoreは`0.435093`から`0.546377`へ改善したがTop 5には入らなかった。簡潔な英語ではrank 7へ戻った。p.29の「only two data sets」やデータ一覧ページが上位に残り、言語差よりFigure 5由来ノイズを含むdirect-answer Chunkの品質と競合表現の影響が大きいというIssue 010の診断と整合する。
+- 4ケースを通じて、英語化はrelevant scoreを概ね上げたが、順位やHit@3を必ず改善しなかった。Case 4ではcross-lingualとscope、Case 5ではqueryの簡潔さ、Case 6では競合Chunk、Case 8ではChunk contaminationがそれぞれ異なる形で作用している。
+
+このIssueではtranslation、query rewriting、reranking、hybrid retrievalをproductionへ導入しない。診断結果は、単一のquery-language施策を直ちに採用する根拠ではなく、次の実験で変更する要因を絞るための観測値として扱う。
