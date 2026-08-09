@@ -20,6 +20,7 @@
 - 永続corpusへ任意の表示名を付け、名前変更とcorpus全体の削除ができる
 - PySide6デスクトップGUIで保存済み資料セットを管理し、質問できる
 - GUIで資料セット内の文書名、source path、`CURRENT`／`MODIFIED`／`MISSING`／`UNKNOWN`状態を確認できる
+- PySide6公式の`pyside6-deploy`でローカル動作確認用のstandalone macOS `.app`を再現できる
 
 ## MVPの対象外
 
@@ -33,6 +34,13 @@
 - フォルダやglobによるPDFの自動収集
 - source fileの自動監視・自動再index
 - 欠落PDFの移動先検索やrename workflow
+- Developer ID署名
+- hardened runtime
+- notarization
+- DMG／Mac App Store配布
+- custom app icon
+- auto update
+- cross-platform installer
 
 ## エラーとして扱うもの
 
@@ -109,6 +117,14 @@ corpusがない場合は実itemを追加せず独立したlabelで新規作成�
 `DocumentStatus`の`CURRENT`／`MODIFIED`／`MISSING`／`UNKNOWN`は内部値とinspection logicを維持し、GUIだけでそれぞれ`最新`／`変更あり`／`ファイルなし`／`未確認`と表示する。各statusの意味はtooltipで説明し、document UUIDは引き続き資料名itemのQt user dataへ保持する。文書tableは資料名を調整可能な読みやすい幅、状態をcontent幅、保存元pathを残り幅とし、path全体はtooltipでも確認できる。
 
 WidgetはSQL、PDF処理、Chunking、embedding、retrieval、generationを実装せず、GUI service/controller層を介して既存のstore、document manager、RAG serviceを呼び出す。資料セット作成、文書追加、再インデックス、状態確認、質問は`QThreadPool`／`QRunnable`でGUI thread外に実行する。処理中は競合操作を無効化し、成功・失敗のどちらでもUIを復帰させる。失敗時はエラーダイアログを表示し、入力内容と保存済み資料セットを失わない。
+
+## macOS application packaging仕様
+
+repository直下の`run_gui.py`は`research_rag.gui_app.main()`だけを呼び出すdeploy用launcherとし、GUI初期化やRAG処理を複製しない。`pysidedeploy.spec`はPySide6公式`pyside6-deploy`のstandalone modeを使用し、成果物をGit管理外の`build/deploy/Research RAG.app`へ生成する。PyInstallerは併用しない。
+
+`scripts/build_macos_app.sh`はmacOSと`pyside6-deploy`の存在を事前検証し、repository内のspecを一時コピーしてbuildする。生成bundleはFinder/resource-fork extended attributeを除去してローカル用ad-hoc署名を付け、実行ファイルの存在とstrict code-signature validationを成功条件とする。Developer ID署名は行わない。通常のpytestは設定とhelperのintegration boundaryだけを検証し、Nuitkaによるfull buildは実行しない。
+
+bundleへcorpus DBの`indexes.sqlite3`、GUI設定の`settings.ini`、source PDF、Ollama本体、Ollama modelを含めない。runtime data pathは既存の`QStandardPaths.AppDataLocation`を維持し、bundle内部へDBや設定を書き込まない。Ollama接続には保存済みGUI runtime設定のbase URLを使用する。corpus SQLite schemaはversion 3のままとし、CLI、`python -m research_rag.gui_app`、worker／teardownの動作を変更しない。
 
 ## 後続Issueで決定する事項
 

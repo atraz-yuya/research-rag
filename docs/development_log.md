@@ -668,3 +668,31 @@ corpus SQLite schemaはversion 3のまま維持し、既存corpusのindex／docu
 ### 互換性と安全性
 
 corpus SQLite schema v3、GUI settings semantics、UUID、DocumentStatus、PDF Reader、Chunker、Embedder、Retriever、RAG prompt、page numbering、citation data、model defaults、CLI syntax／outputは変更していない。既存`QtTaskRunner`、close延期、session-level `QApplication`、DeferredDelete cleanupを維持し、nested `QEventLoop.exec()`、`shiboken6.delete()`、workerからのwidget access、新しい外部依存は追加していない。
+
+## Issue 026: Add reproducible macOS application packaging
+
+実施日: 2026-08-10
+
+### 実施内容
+
+- repository直下へ薄い`run_gui.py`を追加し、`research_rag.gui_app.main()`の呼び出し以外のGUI起動処理やRAG処理を複製しないようにした
+- PySide6公式`pyside6-deploy`用の`pysidedeploy.spec`を追加し、standalone mode、表示名`Research RAG`、出力先`build/deploy`、実測済みNuitka 4.1.3を記録した。PyInstallerは使用していない
+- `scripts/build_macos_app.sh`を追加し、macOS判定、`pyside6-deploy`存在確認、specからのNuitka version適用、dry-run、環境固有値を書き戻さない一時spec、stale bundle除去、実行ファイル確認を実装した
+- macOSがcodesign前に拒否するFinder／resource-fork extended attributeを除去し、ローカル用ad-hoc署名とstrict検証まで成功した場合だけbuild成功とするようにした。Developer ID署名は行っていない
+- `build/`、`deployment/`、`.app`、一時deploy specをGit ignore対象とし、build成果物や中間生成物をcommit対象から除外した
+- launcher delegation、standalone spec、出力／ignore設定、user dataとOllama非bundle、非macOS／tool不足エラー、dry-runの一時specとversion指定、署名検証境界を確認するpackaging integration testを追加した。通常のpytestではfull Nuitka buildを実行しない
+
+### 実機確認
+
+- macOS 26.5.2 arm64、Python 3.11.15、PySide6 6.11.1、Nuitka 4.1.3で`./scripts/build_macos_app.sh --dry-run`を成功させた
+- 同環境でbuild helperを通し実行し、171 MBの`build/deploy/Research RAG.app`を生成した。helperは最終的にexit code 0となり、arm64 Mach-O実行ファイル、Info.plistの`Research RAG`表示名、ad-hoc署名のstrict validationを確認した
+- bundle内に`indexes.sqlite3`、`settings.ini`、PDF、Ollama本体、Ollama modelがないことを確認した
+- Ollamaを使用せず、生成bundleをoffscreen実行とmacOSの`open -n`の両方で起動した。空GUIがevent loopへ入り、初回DBがbundle外の`~/Library/Application Support/ResearchRAG/indexes.sqlite3`へschema version 3として作成されることを確認した
+- settingsは値を保存する操作を行わなかったため起動smokeでは新規作成されていないが、既存のpath unit testで同じbundle外AppDataLocationの`settings.ini`へ解決されることを確認している
+- smoke前に存在しなかった`ResearchRAG` AppDataディレクトリは、schema確認後に検証残骸として削除して実行前の状態へ戻した
+- 実Ollamaを使うRAG質問smokeは行っていない。今回確認したのはOllamaなしでの空GUI起動と保存先だけである
+- `QT_QPA_PLATFORM=offscreen python -X faulthandler -m pytest`で最終的に全417件を成功させ、worker／MainWindow teardown 48件をfaulthandler付きfresh processで5回連続成功させた。packaging focused testは7件成功した
+
+### 互換性と今回の対象外
+
+`python -m research_rag.gui_app`、既存CLI、corpus SQLite schema v3、QStandardPathsによるruntime保存先、Ollama URL設定、QtTaskRunner／teardown、PDF Reader、Chunker、Embedder、Retriever、RAG serviceは変更していない。Developer ID signing、hardened runtime、notarization、DMG、Mac App Store、custom app icon、auto update、cross-platform installerは追加していない。

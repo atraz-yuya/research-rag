@@ -8,4 +8,7 @@ __pycache__/
 data/
 dist/
 build/
+deployment/
 *.egg-info/
+*.app/
+/.pysidedeploy.build.*

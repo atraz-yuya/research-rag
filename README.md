@@ -172,6 +172,27 @@ PDF抽出やOllama処理などの実行中は、正確な進捗率を取得で�
 
 資料セット作成、追加、再インデックス、状態確認、質問はQtのworker threadで実行されます。処理中にwindowを閉じた場合は、実行中の有限処理が安全に終了してからwindowを閉じます。Ollamaへ接続できない場合や処理に失敗した場合はエラーダイアログを表示し、質問入力を保持したまま操作可能な状態へ戻ります。会話履歴は保持せず、質問ごとに独立して回答します。
 
+## macOSアプリケーションのビルド
+
+macOSでは、PySide6公式の`pyside6-deploy`を使ってstandaloneな`Research RAG.app`を再現できます。PyInstallerは使用しません。仮想環境を有効化して開発用installを済ませたリポジトリルートで、最初にdry-runを確認し、その後build helperを実行します。
+
+```bash
+./scripts/build_macos_app.sh --dry-run
+./scripts/build_macos_app.sh
+```
+
+成果物は`build/deploy/Research RAG.app`です。build helperはdry-runを含めて内部で`pyside6-deploy`を呼び、specに記録したNuitka versionも明示的に適用します。macOS以外、または有効な環境に`pyside6-deploy`がない場合は理由を表示して失敗します。実ビルドでは環境固有の値が追跡中の設定へ書き戻されないよう、repositoryの`pysidedeploy.spec`を一時コピーして使用します。生成後はFinder/resource-fork属性を除去してローカル用のad-hoc署名を付け、strict検証まで成功した場合だけbuild完了とします。これはDeveloper ID署名ではありません。開発時の`python -m research_rag.gui_app`とCLIは従来どおり利用できます。
+
+ローカルでbuildしたDeveloper ID未署名（ad-hoc署名）のアプリは、次のように起動できます。
+
+```bash
+open "build/deploy/Research RAG.app"
+```
+
+`.app`には`indexes.sqlite3`、`settings.ini`、PDF、Ollama本体、Ollama modelを含めません。DBと設定は起動後も`QStandardPaths.AppDataLocation`（macOSでは通常`~/Library/Application Support/ResearchRAG`）へ保存され、app bundle内部には書き込みません。Ollamaは別途起動・model準備が必要で、接続先にはGUIで保存したOllama URLを使います。
+
+このbuildはローカル動作確認用です。Developer ID署名、hardened runtime、notarization、DMG、Mac App Store配布、custom icon、auto update、cross-platform installerはまだ対象外です。
+
 ## CLIの実行
 
 ### 1. 仮想環境を有効化する
