@@ -462,3 +462,27 @@ query-languageだけでは順位改善が一貫しなかったため、scope条�
 ### 次の段階
 
 Retrieval tuningは一度区切る。LLM rerankingを統合する場合は別Issueでopt-in動作、latency表示、context／memory要件、失敗時のfallbackを明確にする。それ以外は複数PDF、永続化／文書管理、会話履歴、GUIなどのapplication機能へ進む。
+
+## Issue 018: Add in-memory multi-PDF RAG support
+
+実施日: 2026-08-09
+
+### 実施内容
+
+- 1つ以上のPDFを受け取る`answer_question_from_pdfs()`を追加し、既存の`answer_question_from_pdf()`を互換ラッパーとして維持した
+- PDFを入力順に各1回だけ抽出し、結合したページ群をproduction Chunkerへ1回だけ渡すようにした
+- 全PDFのChunkをまとめて1回だけembeddingし、質問も1回だけembeddingして、既存Retrieverで全PDF横断のglobal rankingを行うようにした
+- `document_name`とPDFごとに1始まりの`page_number`を既存データモデルのまま保持した
+- 同じbasenameのPDFが複数ある場合は抽出前にエラーとし、出典名の衝突を防ぐようにした
+- 文章を抽出できないPDFだけを識別する`NoExtractableTextError`を`ValueError`互換のサブクラスとして追加した。一部のPDFだけが空なら続行し、全PDFから検索可能なChunkを作れない場合は明確なエラーにした
+- CLIの既存の位置引数形式を維持し、追加PDFを繰り返し`--pdf`で指定できるようにした
+- fakeを使う単体テストで、処理回数、入力順、global ranking、複数文書の出典、入力検証、空PDF、下流エラー、単一PDF互換性を確認した
+- Git管理外の1ページtext PDFを2件作成してローカルOllamaでCLI smoke testを行い、質問に対応する`borealis.pdf p.1`がglobal rank 1、`atlas.pdf p.1`がrank 2として表示されることを確認した
+
+### 今回追加していないもの
+
+永続化、SQLite、FAISS／ChromaなどのベクトルDB、GUI、フォルダ自動収集、rerankingは追加していない。PDF Reader、production Chunker、Embedder、Retrieverのアルゴリズムと既定設定は変更していない。
+
+### 次の段階
+
+複数質問で同じ文書集合を再利用する場合のindex lifecycleと、必要性を評価したうえでの永続化／文書管理を検討する。

@@ -5,7 +5,7 @@ from pathlib import Path
 
 from .models import RagAnswer
 from .ollama_client import DEFAULT_OLLAMA_BASE_URL, OllamaClient, OllamaError
-from .rag_service import answer_question_from_pdf
+from .rag_service import answer_question_from_pdfs
 
 
 DEFAULT_EMBEDDING_MODEL = "qwen3-embedding:0.6b"
@@ -16,7 +16,7 @@ DEFAULT_TOP_K = 3
 def build_parser() -> argparse.ArgumentParser:
     """Build the command-line argument parser."""
     parser = argparse.ArgumentParser(
-        description="単一PDFの内容を検索し、Ollamaで質問へ回答します。"
+        description="1つ以上のPDFを横断検索し、Ollamaで質問へ回答します。"
     )
     parser.add_argument(
         "pdf_path",
@@ -24,6 +24,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="質問対象となるPDFファイルのパス",
     )
     parser.add_argument("question", help="PDFの内容についての質問")
+    parser.add_argument(
+        "--pdf",
+        dest="additional_pdf_paths",
+        action="append",
+        type=Path,
+        default=[],
+        help="追加の質問対象PDF（複数回指定可能）",
+    )
     parser.add_argument(
         "--embedding-model",
         default=DEFAULT_EMBEDDING_MODEL,
@@ -54,8 +62,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         client = OllamaClient(base_url=args.ollama_base_url)
-        answer = answer_question_from_pdf(
-            args.pdf_path,
+        pdf_paths = (args.pdf_path, *args.additional_pdf_paths)
+        answer = answer_question_from_pdfs(
+            pdf_paths,
             args.question,
             embedding_model=args.embedding_model,
             generation_model=args.generation_model,

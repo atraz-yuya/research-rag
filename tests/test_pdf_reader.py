@@ -3,7 +3,7 @@ from pathlib import Path
 import pymupdf
 import pytest
 
-from research_rag.pdf_reader import extract_page_texts
+from research_rag.pdf_reader import NoExtractableTextError, extract_page_texts
 
 
 def create_pdf(pdf_path: Path, page_texts: list[str | None]) -> None:
@@ -86,5 +86,8 @@ def test_extract_page_texts_raises_when_all_pages_are_empty(tmp_path: Path) -> N
     pdf_path = tmp_path / "all-empty.pdf"
     create_pdf(pdf_path, [None, None])
 
-    with pytest.raises(ValueError, match="No text could be extracted"):
+    with pytest.raises(
+        NoExtractableTextError,
+        match="No text could be extracted",
+    ):
         extract_page_texts(pdf_path)

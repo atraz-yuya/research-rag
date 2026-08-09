@@ -5,7 +5,7 @@ from .chunker import split_pages_into_chunks
 from .embedder import embed_chunks
 from .models import RagAnswer, SearchResult
 from .ollama_client import OllamaClient
-from .pdf_reader import extract_page_texts
+from .pdf_reader import NoExtractableTextError, extract_page_texts
 from .retriever import retrieve_similar_chunks
 
 
@@ -31,26 +31,61 @@ def answer_question_from_pdf(
     top_k: int = 3,
     client: OllamaClient | None = None,
 ) -> RagAnswer:
-    """Run the complete single-PDF RAG pipeline for one question."""
+    """Run the RAG pipeline for one PDF while preserving the original API."""
+    return answer_question_from_pdfs(
+        (pdf_path,),
+        question,
+        embedding_model=embedding_model,
+        generation_model=generation_model,
+        top_k=top_k,
+        client=client,
+    )
+
+
+def answer_question_from_pdfs(
+    pdf_paths: Sequence[Path],
+    question: str,
+    *,
+    embedding_model: str,
+    generation_model: str,
+    top_k: int = 3,
+    client: OllamaClient | None = None,
+) -> RagAnswer:
+    """Run one shared in-memory RAG pipeline across selected PDFs."""
     clean_question = question.strip()
     if not clean_question:
         raise ValueError("question must not be empty")
-    if not embedding_model.strip():
+    clean_embedding_model = embedding_model.strip()
+    if not clean_embedding_model:
         raise ValueError("embedding_model must not be empty")
-    if not generation_model.strip():
+    clean_generation_model = generation_model.strip()
+    if not clean_generation_model:
         raise ValueError("generation_model must not be empty")
     if top_k <= 0:
         raise ValueError("top_k must be greater than 0")
 
+    ordered_pdf_paths = tuple(pdf_paths)
+    if not ordered_pdf_paths:
+        raise ValueError("at least one PDF must be selected")
+    _validate_unique_document_names(ordered_pdf_paths)
+
     ollama_client = client if client is not None else OllamaClient()
-    pages = extract_page_texts(pdf_path)
+    pages = []
+    for pdf_path in ordered_pdf_paths:
+        try:
+            pages.extend(extract_page_texts(pdf_path))
+        except NoExtractableTextError:
+            continue
+
     chunks = split_pages_into_chunks(pages)
     if not chunks:
-        raise ValueError("no searchable chunks were generated from PDF")
+        raise ValueError(
+            "no searchable chunks were generated from the selected PDFs"
+        )
 
     embedded_chunks = embed_chunks(
         chunks,
-        embedding_model.strip(),
+        clean_embedding_model,
         ollama_client,
     )
     if not embedded_chunks:
@@ -58,7 +93,7 @@ def answer_question_from_pdf(
 
     query_embeddings = ollama_client.embed_texts(
         [clean_question],
-        model=embedding_model.strip(),
+        model=clean_embedding_model,
     )
     if len(query_embeddings) != 1:
         raise ValueError("question embedding response must contain exactly one vector")
@@ -74,9 +109,27 @@ def answer_question_from_pdf(
     return generate_answer(
         clean_question,
         search_results,
-        generation_model.strip(),
+        clean_generation_model,
         ollama_client,
     )
+
+
+def _validate_unique_document_names(pdf_paths: Sequence[Path]) -> None:
+    seen_names: set[str] = set()
+    duplicate_names: set[str] = set()
+
+    for pdf_path in pdf_paths:
+        document_name = pdf_path.name
+        if document_name in seen_names:
+            duplicate_names.add(document_name)
+        seen_names.add(document_name)
+
+    if duplicate_names:
+        names = ", ".join(sorted(duplicate_names))
+        raise ValueError(
+            "PDF document names must be unique; duplicate basename(s): "
+            f"{names}"
+        )
 
 
 def generate_answer(
