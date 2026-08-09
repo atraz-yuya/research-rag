@@ -90,6 +90,12 @@ GUIは`python -m research_rag.gui_app`で起動する。既存CLIの構文・既
 
 GUIの既定DBは`QStandardPaths.AppDataLocation`配下の`indexes.sqlite3`とする。テストではDB pathを注入し、実ユーザーデータ領域へ書き込まない。元PDFはアプリケーションデータ領域へコピーせず、資料の削除でも元PDFを削除しない。
 
+GUI runtime設定はimmutableなsnapshotとして扱い、Embedding model、Generation model、Top-K、Ollama base URLを設定画面で編集できる。値はmodel名の空文字、Top-Kの1未満または100超、HTTP(S) host URLでない接続先を適用前に拒否し、Ollama URL末尾の`/`は正規化する。既定値はembedding=`qwen3-embedding:0.6b`、generation=`qwen3:4b-instruct`、Top-K=`3`、URL=`http://localhost:11434`とする。
+
+設定はcorpus SQLiteとは別の`QSettings` INIとして、既定DBと同じapplication data directoryの`settings.ini`へatomicに保存する。初回起動と保存値が不正な場合は安全な既定snapshotを使用する。適用時にOllamaへnetwork callは行わず、保存失敗時は同じclientを含む直前のlive snapshotへrollbackしてlive設定と永続設定の不一致を残さない。SQLite schemaはversion 3のまま変更しない。
+
+Embedding model設定は新規corpus作成時だけ使用する。既存corpusの`embedding_model`を変更せず、質問のquery embedding、文書追加、再インデックスはindexに保存済みのmodelを使い続ける。選択中corpusが実際に使用するmodelをGUIに表示する。Generation modelとTop-Kは設定保存後の質問から使用し、Ollama URL変更時はGUI serviceとdocument managerを同一の新しいclientへ切り替える。worker処理中は設定操作を無効化する。
+
 起動時は`SQLiteRagIndexStore.list_indexes()`の軽量metadataから保存済み資料セットを表示し、永続表示名を優先する。名前がない既存corpusはPDF名ベースのラベルを使い、UUIDは内部item dataとして保持して表示文字列から解析しない。資料セット選択時は`PersistentRagDocumentManager.inspect_documents()`を使い、文書順を保って文書名、状態、source pathを表示する。
 
 新規資料セットは1つ以上のPDFと表示名からatomicに作成でき、選択中の資料セットはRAG内容やUUIDを変えずに名前変更できる。選択中の資料セットにはPDFを1件ずつ追加でき、選択文書は保存済みsource pathから再インデックスできる。文書削除と資料セット全体の削除では、確認ダイアログで元PDFが削除されないことを明示する。資料セット全体の削除は既存workerを使ってSQLite内の関連行をcascade削除し、最後の資料セットを削除した後は文書・回答・参照表示を空にする。状態更新はfilesystem fingerprintだけを確認し、PDF extractionやOllamaを実行しない。

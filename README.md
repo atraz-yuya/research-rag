@@ -162,7 +162,9 @@ python -m research_rag.gui_app
 
 GUIでは、保存済み資料セットの一覧、文書の`CURRENT`／`MODIFIED`／`MISSING`／`UNKNOWN`状態、source pathを確認できます。複数PDFから名前付き資料セットを作成し、後から名前を変更できます。PDFの追加、選択文書の再インデックスと削除、状態更新、資料セットへの質問にも対応します。`資料セットを削除`は、その資料セットに属するSQLite内のindex・文書・Chunk・embeddingをまとめて削除しますが、元PDFファイルそのものは削除しません。表示名の重複は許可され、内部のUUIDで資料セットを区別します。
 
-既定のSQLite DBはQtの`QStandardPaths.AppDataLocation`配下に作成されます。macOSでは通常、`~/Library/Application Support/ResearchRAG/indexes.sqlite3`です。元PDFの本文はSQLiteへChunkとembeddingとして保存されますが、元PDFファイルをアプリケーションデータ領域へコピーしません。そのため、追加後に元PDFを移動・変更・削除すると、状態はそれぞれ`MISSING`または`MODIFIED`になります。保存済みChunkは引き続き質問に利用でき、再インデックスには元のsource pathにPDFが必要です。
+`設定`画面では、Embedding model、Generation model、Top-K（1〜100）、Ollama URLを変更できます。設定は検証後に`settings.ini`へ保存され、GUI再起動後も引き継がれます。Embedding modelの変更は、新しく作成する資料セットだけに適用されます。既存資料セットへの質問、PDF追加、再インデックスは、その資料セットに保存済みのembedding modelを引き続き使用し、選択中の実際のモデル名は資料セット一覧の下に表示されます。Generation modelとTop-Kは次の質問から反映され、Ollama URLを変更すると以後の文書処理と質問が同じ新しい接続先を使います。設定の適用だけではOllamaへ接続しません。
+
+既定のSQLite DBはQtの`QStandardPaths.AppDataLocation`配下に作成されます。macOSでは通常、`~/Library/Application Support/ResearchRAG/indexes.sqlite3`です。GUI設定は同じディレクトリの`settings.ini`へ、corpus SQLiteとは分離して保存します。元PDFの本文はSQLiteへChunkとembeddingとして保存されますが、元PDFファイルをアプリケーションデータ領域へコピーしません。そのため、追加後に元PDFを移動・変更・削除すると、状態はそれぞれ`MISSING`または`MODIFIED`になります。保存済みChunkは引き続き質問に利用でき、再インデックスには元のsource pathにPDFが必要です。
 
 資料セット作成、追加、再インデックス、状態確認、質問はQtのworker threadで実行されます。処理中にwindowを閉じた場合は、実行中の有限処理が安全に終了してからwindowを閉じます。Ollamaへ接続できない場合や処理に失敗した場合はエラーダイアログを表示し、質問入力を保持したまま操作可能な状態へ戻ります。会話履歴は保持せず、質問ごとに独立して回答します。
 

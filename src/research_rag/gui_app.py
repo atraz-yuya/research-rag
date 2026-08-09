@@ -2,13 +2,17 @@ from __future__ import annotations
 
 import sys
 import traceback
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from PySide6.QtCore import QCoreApplication, QStandardPaths
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from .gui_service import RagGuiService
+from .gui_settings import (
+    GuiRuntimeSettings,
+    GuiSettingsStore,
+)
 from .index_store import SQLiteRagIndexStore
 from .main_window import MainWindow
 from .ollama_client import OllamaClient
@@ -16,6 +20,7 @@ from .ollama_client import OllamaClient
 
 APPLICATION_NAME = "ResearchRAG"
 DATABASE_FILENAME = "indexes.sqlite3"
+SETTINGS_FILENAME = "settings.ini"
 
 
 def configure_application_identity() -> None:
@@ -35,16 +40,39 @@ def default_database_path() -> Path:
     return Path(location) / DATABASE_FILENAME
 
 
+def default_settings_path() -> Path:
+    """Resolve GUI preferences beside, but separate from, the corpus DB."""
+    return default_database_path().with_name(SETTINGS_FILENAME)
+
+
 def create_gui_service(
     *,
     db_path: Path | None = None,
+    settings_path: Path | None = None,
+    settings_store: GuiSettingsStore | None = None,
+    settings: GuiRuntimeSettings | None = None,
     client: OllamaClient | None = None,
+    client_factory: Callable[[str], OllamaClient] | None = None,
 ) -> RagGuiService:
-    """Construct and initialize the GUI service with an injectable DB path."""
-    store = SQLiteRagIndexStore(
+    """Load preferences, then construct an initialized GUI service."""
+    selected_db_path = (
         db_path if db_path is not None else default_database_path()
     )
-    service = RagGuiService(store, client=client)
+    selected_settings_store = settings_store or GuiSettingsStore(
+        settings_path
+        if settings_path is not None
+        else selected_db_path.with_name(SETTINGS_FILENAME)
+    )
+    runtime_settings = (
+        settings if settings is not None else selected_settings_store.load()
+    )
+    store = SQLiteRagIndexStore(selected_db_path)
+    service = RagGuiService(
+        store,
+        client=client,
+        runtime_settings=runtime_settings,
+        client_factory=client_factory,
+    )
     service.initialize()
     return service
 
@@ -59,7 +87,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     configure_application_identity()
 
     try:
-        service = create_gui_service()
+        settings_store = GuiSettingsStore(default_settings_path())
+        service = create_gui_service(settings_store=settings_store)
     except Exception as exc:
         traceback.print_exc()
         QMessageBox.critical(
@@ -69,7 +98,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 1
 
-    window = MainWindow(service)
+    window = MainWindow(service, settings_store=settings_store)
     application.aboutToQuit.connect(window.shutdown_for_application_exit)
     window.show()
     return application.exec()

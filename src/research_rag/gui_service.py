@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from .defaults import (
@@ -9,13 +9,17 @@ from .defaults import (
     DEFAULT_TOP_K,
 )
 from .document_manager import DocumentInspection, PersistentRagDocumentManager
+from .gui_settings import (
+    GuiRuntimeSettings,
+    validate_gui_runtime_settings,
+)
 from .index_store import (
     SQLiteRagIndexStore,
     StoredDocumentMetadata,
     StoredRagIndexMetadata,
 )
 from .models import RagAnswer
-from .ollama_client import OllamaClient
+from .ollama_client import DEFAULT_OLLAMA_BASE_URL, OllamaClient
 from .rag_service import answer_question_from_index
 
 
@@ -31,17 +35,85 @@ class RagGuiService:
         embedding_model: str = DEFAULT_EMBEDDING_MODEL,
         generation_model: str = DEFAULT_GENERATION_MODEL,
         top_k: int = DEFAULT_TOP_K,
+        runtime_settings: GuiRuntimeSettings | None = None,
+        client_factory: Callable[[str], OllamaClient] | None = None,
     ) -> None:
         self.store = store
-        self.client = client if client is not None else OllamaClient()
+        self._client_factory = (
+            client_factory
+            if client_factory is not None
+            else lambda base_url: OllamaClient(base_url=base_url)
+        )
+        initial_settings = validate_gui_runtime_settings(
+            runtime_settings
+            if runtime_settings is not None
+            else GuiRuntimeSettings(
+                embedding_model=embedding_model,
+                generation_model=generation_model,
+                top_k=top_k,
+                ollama_base_url=str(
+                    getattr(client, "base_url", DEFAULT_OLLAMA_BASE_URL)
+                ),
+            )
+        )
+        self.client = (
+            client
+            if client is not None
+            else self._client_factory(initial_settings.ollama_base_url)
+        )
         self.manager = (
             manager
             if manager is not None
             else PersistentRagDocumentManager(store, client=self.client)
         )
-        self.embedding_model = embedding_model
-        self.generation_model = generation_model
-        self.top_k = top_k
+        self.manager.client = self.client
+        self._runtime_settings = initial_settings
+
+    @property
+    def runtime_settings(self) -> GuiRuntimeSettings:
+        """Return the immutable settings snapshot used by future operations."""
+        return self._runtime_settings
+
+    @property
+    def embedding_model(self) -> str:
+        return self._runtime_settings.embedding_model
+
+    @property
+    def generation_model(self) -> str:
+        return self._runtime_settings.generation_model
+
+    @property
+    def top_k(self) -> int:
+        return self._runtime_settings.top_k
+
+    def apply_runtime_settings(
+        self,
+        settings: GuiRuntimeSettings,
+    ) -> GuiRuntimeSettings:
+        """Apply validated local settings without contacting Ollama."""
+        normalized = validate_gui_runtime_settings(settings)
+        client = self.client
+        if (
+            normalized.ollama_base_url
+            != self._runtime_settings.ollama_base_url
+        ):
+            client = self._client_factory(normalized.ollama_base_url)
+
+        self.client = client
+        self.manager.client = client
+        self._runtime_settings = normalized
+        return normalized
+
+    def restore_runtime_settings(
+        self,
+        settings: GuiRuntimeSettings,
+        client: OllamaClient,
+    ) -> None:
+        """Restore an exact prior local state after persistence failure."""
+        normalized = validate_gui_runtime_settings(settings)
+        self.client = client
+        self.manager.client = client
+        self._runtime_settings = normalized
 
     def initialize(self) -> None:
         """Initialize or migrate the persistent store."""
