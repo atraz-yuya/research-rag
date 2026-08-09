@@ -21,7 +21,7 @@ def make_answer() -> RagAnswer:
     )
     second = SearchResult(
         chunk=Chunk(
-            document_name="paper.pdf",
+            document_name="appendix.pdf",
             page_number=8,
             chunk_index=0,
             text="Second source passage.",
@@ -49,11 +49,31 @@ def test_parser_accepts_pdf_question_models_and_top_k() -> None:
     )
 
     assert args.pdf_path == Path("paper.pdf")
+    assert args.additional_pdf_paths == []
     assert args.question == "What is proposed?"
     assert args.embedding_model == "custom-embedding"
     assert args.generation_model == "custom-generation"
     assert args.top_k == 5
     assert args.ollama_base_url == "http://ollama.test:11434"
+
+
+def test_parser_accepts_repeated_additional_pdfs_in_input_order() -> None:
+    args = cli.build_parser().parse_args(
+        [
+            "primary.pdf",
+            "Question",
+            "--pdf",
+            "second.pdf",
+            "--pdf",
+            "third.pdf",
+        ]
+    )
+
+    assert args.pdf_path == Path("primary.pdf")
+    assert args.additional_pdf_paths == [
+        Path("second.pdf"),
+        Path("third.pdf"),
+    ]
 
 
 def test_parser_uses_documented_defaults() -> None:
@@ -82,8 +102,8 @@ def test_main_runs_pipeline_and_prints_answer_and_sources(
     expected_answer = make_answer()
     captured: dict[str, Any] = {}
 
-    def fake_answer_question_from_pdf(
-        pdf_path: Path,
+    def fake_answer_question_from_pdfs(
+        pdf_paths: tuple[Path, ...],
         question: str,
         *,
         embedding_model: str,
@@ -92,7 +112,7 @@ def test_main_runs_pipeline_and_prints_answer_and_sources(
         client: Any,
     ) -> RagAnswer:
         captured.update(
-            pdf_path=pdf_path,
+            pdf_paths=pdf_paths,
             question=question,
             embedding_model=embedding_model,
             generation_model=generation_model,
@@ -103,8 +123,8 @@ def test_main_runs_pipeline_and_prints_answer_and_sources(
 
     monkeypatch.setattr(
         cli,
-        "answer_question_from_pdf",
-        fake_answer_question_from_pdf,
+        "answer_question_from_pdfs",
+        fake_answer_question_from_pdfs,
     )
 
     exit_code = cli.main(
@@ -131,17 +151,59 @@ def test_main_runs_pipeline_and_prints_answer_and_sources(
     assert "[1] paper.pdf p.3" in output.out
     assert "score: 0.9123" in output.out
     assert "First source passage." in output.out
-    assert "[2] paper.pdf p.8" in output.out
+    assert "[2] appendix.pdf p.8" in output.out
     assert "score: 0.8512" in output.out
     assert "Second source passage." in output.out
     assert captured == {
-        "pdf_path": Path("paper.pdf"),
+        "pdf_paths": (Path("paper.pdf"),),
         "question": "What is proposed?",
         "embedding_model": "embedding-model",
         "generation_model": "generation-model",
         "top_k": 2,
         "base_url": "http://ollama.test:11434",
     }
+
+
+def test_main_passes_primary_and_additional_pdfs_in_order(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    captured_paths: tuple[Path, ...] | None = None
+
+    def fake_answer_question_from_pdfs(
+        pdf_paths: tuple[Path, ...],
+        question: str,
+        **kwargs: Any,
+    ) -> RagAnswer:
+        nonlocal captured_paths
+        captured_paths = pdf_paths
+        return make_answer()
+
+    monkeypatch.setattr(
+        cli,
+        "answer_question_from_pdfs",
+        fake_answer_question_from_pdfs,
+    )
+
+    exit_code = cli.main(
+        [
+            "primary.pdf",
+            "Question",
+            "--pdf",
+            "second.pdf",
+            "--pdf",
+            "third.pdf",
+        ]
+    )
+
+    output = capsys.readouterr()
+    assert exit_code == 0
+    assert output.err == ""
+    assert captured_paths == (
+        Path("primary.pdf"),
+        Path("second.pdf"),
+        Path("third.pdf"),
+    )
 
 
 @pytest.mark.parametrize(
@@ -157,13 +219,13 @@ def test_main_reports_pipeline_error_and_returns_nonzero(
     capsys: pytest.CaptureFixture[str],
     error: Exception,
 ) -> None:
-    def fake_answer_question_from_pdf(*args: Any, **kwargs: Any) -> RagAnswer:
+    def fake_answer_question_from_pdfs(*args: Any, **kwargs: Any) -> RagAnswer:
         raise error
 
     monkeypatch.setattr(
         cli,
-        "answer_question_from_pdf",
-        fake_answer_question_from_pdf,
+        "answer_question_from_pdfs",
+        fake_answer_question_from_pdfs,
     )
 
     exit_code = cli.main(["paper.pdf", "Question"])

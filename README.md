@@ -6,7 +6,7 @@
 
 ## 現在の開発段階
 
-テキストを含む単一PDFへ質問できるCLI版MVPを実装済みです。PDFから抽出した文章をページ境界を保って検索し、Ollamaが生成した回答と、根拠となるPDF名・ページ番号・類似度・文章を表示します。
+テキストを含む1つ以上のPDFへ質問できるCLI版MVPを実装済みです。選択したPDFを1つの共有検索空間として扱い、ページ境界を保って全文書を横断検索します。Ollamaが生成した回答と、根拠となるPDF名・ページ番号・類似度・文章を表示します。
 
 MVPの範囲と完了条件は [`docs/mvp_spec.md`](docs/mvp_spec.md) を参照してください。
 
@@ -69,6 +69,8 @@ ollama pull qwen3:4b-instruct
 
 ### 4. PDFへ質問する
 
+従来どおり、1つのPDFへ質問できます。
+
 ```bash
 python -m research_rag.cli \
     sample.pdf \
@@ -78,6 +80,18 @@ python -m research_rag.cli \
     --top-k 3
 ```
 
+追加のPDFは`--pdf`を繰り返して指定します。最初の位置引数のPDF、各`--pdf`の順に読み込みますが、検索順位はPDFごとに分けず、すべてのチャンクを対象に一度だけ計算します。
+
+```bash
+python -m research_rag.cli \
+    main-paper.pdf \
+    "これらの資料に共通する結論は何ですか？" \
+    --pdf supplementary-material.pdf \
+    --pdf related-paper.pdf
+```
+
+出典の識別にファイル名を使うため、異なるディレクトリにあっても同じbasename（例: `paper.pdf`）を持つPDFは同時に指定できません。テキストを抽出できないPDFが含まれていても、ほかに検索可能なPDFがあれば処理を続行します。すべてのPDFから検索可能なチャンクを作れない場合はエラーになります。
+
 モデル指定を省略した場合は、上記の2モデルを使用します。Ollamaの接続先はデフォルトで `http://localhost:11434` です。別のモデルや接続先を使用する場合は、次のオプションで変更できます。
 
 ```text
@@ -85,10 +99,11 @@ python -m research_rag.cli \
 --generation-model MODEL
 --top-k NUMBER
 --ollama-base-url URL
+--pdf PDF
 ```
 
-CLIは回答本文に続けて、検索順位、PDF名、1始まりのページ番号、コサイン類似度、根拠文章を表示します。
+CLIは回答本文に続けて、検索順位、PDF名、PDF内で1始まりのページ番号、コサイン類似度、根拠文章を表示します。PDFの抽出・チャンク・埋め込みは実行ごとのメモリ内だけに保持され、永続化されません。
 
 ## MVPの対象外
 
-OCR、複数PDF、GUI、SQLite、会話履歴、FAISS／Chromaによる永続化、クラウドLLMには対応していません。
+OCR、GUI、SQLite、会話履歴、FAISS／ChromaなどのベクトルDBによる永続化、クラウドLLMには対応していません。フォルダやglobによるPDFの自動収集も行いません。

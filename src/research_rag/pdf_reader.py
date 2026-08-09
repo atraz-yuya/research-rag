@@ -5,6 +5,10 @@ import pymupdf
 from .models import PageText
 
 
+class NoExtractableTextError(ValueError):
+    """Raised when a readable PDF contains no extractable text."""
+
+
 def extract_page_texts(pdf_path: Path) -> list[PageText]:
     """Extract text from each page of a PDF in its original page order."""
     if not pdf_path.exists():
@@ -32,6 +36,8 @@ def extract_page_texts(pdf_path: Path) -> list[PageText]:
         ]
 
     if not any(page.text for page in pages):
-        raise ValueError(f"No text could be extracted from PDF: {pdf_path}")
+        raise NoExtractableTextError(
+            f"No text could be extracted from PDF: {pdf_path}"
+        )
 
     return pages
