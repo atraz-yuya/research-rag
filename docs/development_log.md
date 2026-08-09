@@ -535,3 +535,29 @@ SQLite、ファイル保存、serialization、永続embedding、vector DB、GUI�
 ### 次の段階
 
 document-management lifecycleのIssueで、既存indexへの追加・削除・再index、PDF変更検出、ユーザーがpersistent corpusを選択・管理する方法を設計する。
+
+## Issue 021: Add persistent document lifecycle and change detection
+
+実施日: 2026-08-09
+
+### 実施内容
+
+- SQLite schemaをversion 2へ更新し、既存schema v1のindex／document／chunk／embeddingとUUIDを維持する明示的かつtransactionalなv1→v2 migrationを追加した
+- documentごとに`content_sha256`、`file_size`、`mtime_ns`、`indexed_at`を保存し、SHA-256を変更判定の正とした。v1から移行した文書と低水準`save_index()`で保存した文書はfingerprintを推測せず`UNKNOWN`とする
+- schema v2の複合外部キーで、Chunkの`index_id`と別indexに属する`document_id`を組み合わせられないようにした
+- 軽量な`get_index_metadata()`と、atomicな文書追加・削除・Chunk置換用store methodを追加した。metadata/status操作ではembedding BLOBを復元しない
+- `PersistentRagDocumentManager`を追加し、`create_index()`、`inspect_documents()`、`add_document()`、`remove_document()`、`reindex_document()`を実装した
+- source fileをstreaming SHA-256で処理し、create／add／reindexの前後で内容が変わっていないことを確認してから永続化するようにした
+- `CURRENT`／`MODIFIED`／`MISSING`／`UNKNOWN`を区別し、inspectionからPDF extraction、Chunking、Ollama、検索、生成、DB mutationを分離した
+- add／remove／reindexではindex IDを維持し、変更しないdocument IDとembeddingを再生成しない。reindexでは対象document IDとpositionを維持する
+- mutation後のglobal Chunk順をdocument position順かつ連続に保ち、最後の検索可能文書を削除する操作を拒否するようにした
+- schema migration、fingerprint/status、処理回数、ID保持、順序、cross-index制約、失敗時rollback、既存API互換性を`tmp_path`とmockだけで検証する単体テストを追加した
+- Git管理外の3つの小型text PDFとローカルOllamaでcreate→`CURRENT`→source変更→`MODIFIED`→対象1冊のreindex→`CURRENT`→add→remove→store再生成→load→質問のsmoke testを実行した。同じindex ID、再index／未変更文書のdocument ID、`tides.pdf`→`aurora.pdf`の文書順を維持し、質問では`aurora.pdf p.1`がrank 1になった
+
+### 今回変更・追加していないもの
+
+既存CLI syntax、PDF Reader、production Chunker、Embedder、Retriever、RAG service、実験Chunker／reranker、chunk size、overlap、Top K、生成promptは変更していない。GUI、interactive管理CLI、file watcher、自動再index、background job、conversation history、vector DB、新しい外部依存は追加していない。
+
+### 次の段階
+
+永続corpusと文書状態を一覧し、追加・削除・再indexと`answer_question_from_index()`による質問を操作できる小さなPySide6 GUI foundationを検討する。

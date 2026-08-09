@@ -6,7 +6,7 @@
 
 ## 現在の開発段階
 
-テキストを含む1つ以上のPDFへ質問できるCLI版MVPを実装済みです。選択したPDFを1つの共有検索空間として扱い、ページ境界を保って全文書を横断検索します。Ollamaが生成した回答と、根拠となるPDF名・ページ番号・類似度・文章を表示します。
+テキストを含む1つ以上のPDFへ質問できるCLI版MVPを実装済みです。選択したPDFを1つの共有検索空間として扱い、ページ境界を保って全文書を横断検索します。Ollamaが生成した回答と、根拠となるPDF名・ページ番号・類似度・文章を表示します。SQLiteへ保存したcorpusでは、文書の変更検出と文書単位の追加・削除・再indexも利用できます。
 
 MVPの範囲と完了条件は [`docs/mvp_spec.md`](docs/mvp_spec.md) を参照してください。
 
@@ -76,7 +76,7 @@ second_answer = answer_question_from_index(
 )
 ```
 
-`RagIndex`自身による再利用は同じPythonプロセスのメモリ内に限られます。永続化には次節の専用storeを使います。PDFの追加・削除やファイル更新の検出は行いません。既存のCLIと`answer_question_from_pdf()`／`answer_question_from_pdfs()`は従来どおり利用でき、内部で同じbuild＋answerライフサイクルを1回ずつ実行します。
+`RagIndex`自身による再利用は同じPythonプロセスのメモリ内に限られます。永続化には次節の専用storeを使います。既存のCLIと`answer_question_from_pdf()`／`answer_question_from_pdfs()`は従来どおり利用でき、内部で同じbuild＋answerライフサイクルを1回ずつ実行します。
 
 ## SQLiteへのindex保存
 
@@ -103,7 +103,40 @@ saved_indexes = reopened_store.list_indexes()
 deleted = reopened_store.delete_index(metadata.index_id)
 ```
 
-保存形式はschema version 1です。文書・indexには永続UUIDを付け、embeddingはpickleを使わずlittle-endian IEEE-754 float64 BLOBとして保存します。元PDFの絶対source pathも管理情報として保持しますが、loadや質問時にPDFが存在する必要はありません。現在のCLIは永続化を自動的に使用せず、構文も従来どおりです。
+保存形式はschema version 2です。schema version 1のDBは`initialize()`時にtransaction内でv2へ移行し、既存のindex・文書・Chunk・embeddingを維持します。文書・indexには永続UUIDを付け、embeddingはpickleを使わずlittle-endian IEEE-754 float64 BLOBとして保存します。元PDFの絶対source pathも管理情報として保持しますが、loadや質問時にPDFが存在する必要はありません。現在のCLIは永続化を自動的に使用せず、構文も従来どおりです。
+
+## 永続corpusの文書管理
+
+新しく永続corpusを作る場合は`PersistentRagDocumentManager`を使用します。作成時に各PDFのSHA-256をindex処理の前後で確認し、保存済み内容とsource fileの関係を信頼できる形で記録します。
+
+```python
+from pathlib import Path
+
+from research_rag.document_manager import PersistentRagDocumentManager
+from research_rag.index_store import SQLiteRagIndexStore
+from research_rag.ollama_client import OllamaClient
+
+store = SQLiteRagIndexStore(Path.home() / ".research-rag" / "indexes.sqlite3")
+store.initialize()
+manager = PersistentRagDocumentManager(store, client=OllamaClient())
+
+metadata = manager.create_index(
+    [Path("main-paper.pdf"), Path("supplement.pdf")],
+    embedding_model="qwen3-embedding:0.6b",
+)
+
+statuses = manager.inspect_documents(metadata.index_id)
+added = manager.add_document(metadata.index_id, Path("related-paper.pdf"))
+reindexed = manager.reindex_document(
+    metadata.index_id,
+    metadata.documents[0].document_id,
+)
+removed = manager.remove_document(metadata.index_id, added.document_id)
+```
+
+`inspect_documents()`は、保存時と現在のSHA-256を比較して`CURRENT`、`MODIFIED`、`MISSING`、`UNKNOWN`を返します。SHA-256を変更判定の正とし、sizeとmtimeは表示・診断用です。schema v1から移行した文書と、低水準の`save_index()`で保存した文書には信頼できるfingerprintがないため`UNKNOWN`になります。inspectionはPDF抽出やOllamaを実行しません。
+
+追加と再indexでは、対象PDFだけをproduction pipelineで処理し、保存済みembedding modelを使用します。削除では対象文書だけを削除します。いずれも既存の`index_id`と変更しない文書の`document_id`を維持し、既存文書を再embeddingしません。source fileが処理中に変わった場合や外部処理・DB処理が失敗した場合は、保存済みcorpusを変更しません。最後の検索可能文書の削除は拒否されるため、corpus全体を消す場合は`delete_index()`を使用します。
 
 ## CLIの実行
 
@@ -169,4 +202,4 @@ CLIは回答本文に続けて、検索順位、PDF名、PDF内で1始まりの�
 
 ## MVPの対象外
 
-OCR、GUI、SQLite、会話履歴、FAISS／ChromaなどのベクトルDBによる永続化、クラウドLLMには対応していません。フォルダやglobによるPDFの自動収集も行いません。
+OCR、GUI、会話履歴、FAISS／ChromaなどのベクトルDB、クラウドLLMには対応していません。フォルダやglobによるPDFの自動収集、ファイル監視、自動再indexも行いません。
