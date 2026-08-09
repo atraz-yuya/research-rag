@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -6,6 +7,7 @@ import pytest
 from research_rag import gui_service
 from research_rag.document_manager import DocumentInspection, DocumentStatus
 from research_rag.gui_service import RagGuiService, format_corpus_label
+from research_rag.gui_settings import GuiRuntimeSettings
 from research_rag.index_store import (
     StoredDocumentMetadata,
     StoredRagIndexMetadata,
@@ -84,6 +86,7 @@ class StubStore:
 class StubManager:
     def __init__(self) -> None:
         self.calls: list[tuple[Any, ...]] = []
+        self.client: object | None = None
         self.inspections = (
             DocumentInspection(
                 index_id="index-id",
@@ -136,12 +139,21 @@ def make_service(
     manager: StubManager,
     *,
     client: object | None = None,
+    runtime_settings: GuiRuntimeSettings | None = None,
+    client_factory: Callable[[str], object] | None = None,
 ) -> RagGuiService:
     return RagGuiService(
         store,  # type: ignore[arg-type]
         manager=manager,  # type: ignore[arg-type]
         client=client,  # type: ignore[arg-type]
+        runtime_settings=runtime_settings,
+        client_factory=client_factory,  # type: ignore[arg-type]
     )
+
+
+class FakeClient:
+    def __init__(self, base_url: str) -> None:
+        self.base_url = base_url
 
 
 def test_service_initializes_and_lists_lightweight_corpus_metadata() -> None:
@@ -251,6 +263,176 @@ def test_service_rejects_empty_question_before_loading_index() -> None:
         service.answer("index-id", "  \n ")
 
     assert store.load_calls == []
+
+
+def test_service_exposes_and_applies_immutable_runtime_settings() -> None:
+    store = StubStore()
+    manager = StubManager()
+    client = FakeClient("http://old.example.test:11434")
+    initial = GuiRuntimeSettings(
+        embedding_model="embedding-old",
+        generation_model="generation-old",
+        top_k=3,
+        ollama_base_url=client.base_url,
+    )
+    service = make_service(
+        store,
+        manager,
+        client=client,
+        runtime_settings=initial,
+    )
+    changed = GuiRuntimeSettings(
+        embedding_model=" embedding-new ",
+        generation_model=" generation-new ",
+        top_k=9,
+        ollama_base_url="http://old.example.test:11434/",
+    )
+
+    applied = service.apply_runtime_settings(changed)
+
+    assert applied == GuiRuntimeSettings(
+        embedding_model="embedding-new",
+        generation_model="generation-new",
+        top_k=9,
+        ollama_base_url="http://old.example.test:11434",
+    )
+    assert service.runtime_settings == applied
+    assert service.client is client
+    assert manager.client is client
+
+
+def test_embedding_setting_only_changes_future_corpus_creation() -> None:
+    store = StubStore()
+    manager = StubManager()
+    service = make_service(store, manager)
+
+    service.apply_runtime_settings(
+        GuiRuntimeSettings(
+            embedding_model="new-corpus-embedding",
+            generation_model="generation",
+            top_k=3,
+            ollama_base_url="http://localhost:11434",
+        )
+    )
+    service.create_corpus((Path("new.pdf"),))
+    service.add_document("index-id", Path("added.pdf"))
+    service.reindex_document("index-id", "document-id")
+
+    assert manager.calls == [
+        (
+            "create",
+            (Path("new.pdf"),),
+            "new-corpus-embedding",
+            None,
+        ),
+        ("add", "index-id", Path("added.pdf")),
+        ("reindex", "index-id", "document-id"),
+    ]
+    assert store.list_result[0].embedding_model == "stored-embedding-model"
+
+
+def test_generation_model_and_top_k_apply_to_subsequent_questions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = StubStore()
+    manager = StubManager()
+    client = FakeClient("http://localhost:11434")
+    service = make_service(store, manager, client=client)
+    calls: list[tuple[str, int, str, object]] = []
+
+    def fake_answer(
+        index: RagIndex,
+        question: str,
+        *,
+        generation_model: str,
+        top_k: int,
+        client: object,
+    ) -> RagAnswer:
+        calls.append(
+            (generation_model, top_k, index.embedding_model, client)
+        )
+        return RagAnswer("answer", ())
+
+    monkeypatch.setattr(gui_service, "answer_question_from_index", fake_answer)
+    service.apply_runtime_settings(
+        GuiRuntimeSettings(
+            embedding_model="future-only-model",
+            generation_model="new-generation",
+            top_k=8,
+            ollama_base_url=client.base_url,
+        )
+    )
+
+    service.answer("index-id", "question")
+
+    assert calls == [
+        ("new-generation", 8, "stored-embedding-model", client)
+    ]
+
+
+def test_ollama_url_rebuilds_one_shared_client_without_network_call() -> None:
+    store = StubStore()
+    manager = StubManager()
+    old_client = FakeClient("http://localhost:11434")
+    factory_calls: list[str] = []
+
+    def client_factory(base_url: str) -> object:
+        factory_calls.append(base_url)
+        return FakeClient(base_url)
+
+    service = make_service(
+        store,
+        manager,
+        client=old_client,
+        client_factory=client_factory,
+    )
+
+    service.apply_runtime_settings(
+        GuiRuntimeSettings(
+            embedding_model="embedding",
+            generation_model="generation",
+            top_k=3,
+            ollama_base_url="https://remote.example.test:11434/",
+        )
+    )
+
+    assert factory_calls == ["https://remote.example.test:11434"]
+    assert service.client is manager.client
+    assert service.client is not old_client
+    assert service.client.base_url == "https://remote.example.test:11434"
+
+
+def test_restore_runtime_settings_restores_exact_prior_shared_client() -> None:
+    store = StubStore()
+    manager = StubManager()
+    old_client = FakeClient("http://localhost:11434")
+    initial = GuiRuntimeSettings(
+        "embedding-old",
+        "generation-old",
+        3,
+        old_client.base_url,
+    )
+    service = make_service(
+        store,
+        manager,
+        client=old_client,
+        runtime_settings=initial,
+        client_factory=FakeClient,
+    )
+    service.apply_runtime_settings(
+        GuiRuntimeSettings(
+            "embedding-new",
+            "generation-new",
+            6,
+            "http://new.example.test:11434",
+        )
+    )
+
+    service.restore_runtime_settings(initial, old_client)  # type: ignore[arg-type]
+
+    assert service.runtime_settings == initial
+    assert service.client is old_client
+    assert manager.client is old_client
 
 
 def test_corpus_label_hides_uuid_and_summarizes_document_count() -> None:

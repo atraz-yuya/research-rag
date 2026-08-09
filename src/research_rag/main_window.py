@@ -30,12 +30,15 @@ from PySide6.QtWidgets import (
 
 from .document_manager import DocumentInspection
 from .gui_service import RagGuiService, format_corpus_label
+from .gui_settings import GuiSettingsStore
+from .gui_settings_dialog import GuiSettingsDialog
 from .gui_worker import QtTaskRunner, TaskRunner
 from .index_store import StoredRagIndexMetadata
 from .models import RagAnswer
 
 
 _CORPUS_DISPLAY_NAME_ROLE = int(Qt.ItemDataRole.UserRole) + 1
+_CORPUS_EMBEDDING_MODEL_ROLE = int(Qt.ItemDataRole.UserRole) + 2
 
 
 class MainWindow(QMainWindow):
@@ -46,12 +49,15 @@ class MainWindow(QMainWindow):
         service: RagGuiService,
         *,
         task_runner: TaskRunner | None = None,
+        settings_store: GuiSettingsStore | None = None,
     ) -> None:
         super().__init__()
         self.service = service
         self.task_runner = (
             task_runner if task_runner is not None else QtTaskRunner(self)
         )
+        self.settings_store = settings_store
+        self._settings_dialog: GuiSettingsDialog | None = None
         self._busy = False
         self._closing = False
 
@@ -84,6 +90,15 @@ class MainWindow(QMainWindow):
         self.corpus_list = QListWidget(panel)
         self.corpus_list.setObjectName("corpusList")
         layout.addWidget(self.corpus_list)
+        self.corpus_embedding_model_label = QLabel(
+            "使用中のEmbedding model: —",
+            panel,
+        )
+        self.corpus_embedding_model_label.setObjectName(
+            "corpusEmbeddingModelLabel"
+        )
+        self.corpus_embedding_model_label.setWordWrap(True)
+        layout.addWidget(self.corpus_embedding_model_label)
         self.new_corpus_button = QPushButton("新しい資料セット", panel)
         self.new_corpus_button.setObjectName("newCorpusButton")
         layout.addWidget(self.new_corpus_button)
@@ -95,6 +110,9 @@ class MainWindow(QMainWindow):
         corpus_actions.addWidget(self.rename_corpus_button)
         corpus_actions.addWidget(self.delete_corpus_button)
         layout.addLayout(corpus_actions)
+        self.settings_button = QPushButton("設定", panel)
+        self.settings_button.setObjectName("settingsButton")
+        layout.addWidget(self.settings_button)
         return panel
 
     def _build_document_panel(self) -> QWidget:
@@ -172,6 +190,7 @@ class MainWindow(QMainWindow):
         self.new_corpus_button.clicked.connect(self.create_corpus)
         self.rename_corpus_button.clicked.connect(self.rename_corpus)
         self.delete_corpus_button.clicked.connect(self.delete_corpus)
+        self.settings_button.clicked.connect(self.open_settings)
         self.add_document_button.clicked.connect(self.add_document)
         self.reindex_button.clicked.connect(self.reindex_document)
         self.remove_button.clicked.connect(self.remove_document)
@@ -213,8 +232,14 @@ class MainWindow(QMainWindow):
                 _CORPUS_DISPLAY_NAME_ROLE,
                 metadata.display_name,
             )
+            item.setData(
+                _CORPUS_EMBEDDING_MODEL_ROLE,
+                metadata.embedding_model,
+            )
             item.setToolTip(
-                f"資料数: {len(metadata.documents)} / Chunk数: {metadata.chunk_count}"
+                f"資料数: {len(metadata.documents)} / "
+                f"Chunk数: {metadata.chunk_count} / "
+                f"Embedding model: {metadata.embedding_model}"
             )
             self.corpus_list.addItem(item)
             if metadata.index_id == preferred_index_id:
@@ -223,6 +248,7 @@ class MainWindow(QMainWindow):
             selected_row = 0
         self.corpus_list.setCurrentRow(selected_row)
         self.corpus_list.blockSignals(False)
+        self._update_selected_corpus_info()
 
     def selected_index_id(self) -> str | None:
         item = self.corpus_list.currentItem()
@@ -242,6 +268,7 @@ class MainWindow(QMainWindow):
         return str(value) if value else None
 
     def _on_corpus_selection_changed(self) -> None:
+        self._update_selected_corpus_info()
         self.answer_output.clear()
         self.sources_output.clear()
         self.refresh_documents()
@@ -285,6 +312,7 @@ class MainWindow(QMainWindow):
 
     def _clear_selected_corpus_state(self) -> None:
         self._clear_documents()
+        self._update_selected_corpus_info()
         self.answer_output.clear()
         self.sources_output.clear()
 
@@ -357,6 +385,64 @@ class MainWindow(QMainWindow):
     def _after_corpus_deleted(self) -> None:
         self._clear_selected_corpus_state()
         self.refresh_corpora()
+
+    def open_settings(self) -> None:
+        """Open a non-blocking modal editor while no task is active."""
+        if self._busy or self._closing:
+            return
+        if self.settings_store is None:
+            self._show_error("設定の保存先が構成されていません。")
+            return
+        if self._settings_dialog is not None:
+            self._settings_dialog.raise_()
+            self._settings_dialog.activateWindow()
+            return
+
+        dialog = GuiSettingsDialog(self.service.runtime_settings, self)
+        self._settings_dialog = dialog
+        dialog.accepted.connect(self._apply_open_settings)
+        dialog.finished.connect(self._release_settings_dialog)
+        dialog.open()
+
+    def _apply_open_settings(self) -> None:
+        dialog = self._settings_dialog
+        settings_store = self.settings_store
+        if self._closing or dialog is None or settings_store is None:
+            return
+        requested = dialog.selected_settings
+        previous = self.service.runtime_settings
+        if requested == previous:
+            return
+        previous_client = self.service.client
+        try:
+            applied = self.service.apply_runtime_settings(requested)
+            try:
+                settings_store.save(applied)
+            except Exception:
+                self.service.restore_runtime_settings(
+                    previous,
+                    previous_client,
+                )
+                raise
+        except Exception as exc:
+            traceback.print_exception(type(exc), exc, exc.__traceback__)
+            self._show_error(str(exc))
+            return
+        self.statusBar().showMessage("設定を保存しました")
+
+    def _release_settings_dialog(self, _result: int = 0) -> None:
+        self._settings_dialog = None
+
+    def _update_selected_corpus_info(self) -> None:
+        item = self.corpus_list.currentItem()
+        if item is None:
+            model = "—"
+        else:
+            value = item.data(_CORPUS_EMBEDDING_MODEL_ROLE)
+            model = str(value) if value else "—"
+        self.corpus_embedding_model_label.setText(
+            f"使用中のEmbedding model: {model}"
+        )
 
     def add_document(self) -> None:
         index_id = self.selected_index_id()
@@ -502,6 +588,7 @@ class MainWindow(QMainWindow):
             self.new_corpus_button,
             self.rename_corpus_button,
             self.delete_corpus_button,
+            self.settings_button,
             self.add_document_button,
             self.reindex_button,
             self.remove_button,
@@ -519,6 +606,7 @@ class MainWindow(QMainWindow):
         has_document = self.selected_document_id() is not None
         has_question = bool(self.question_input.text().strip())
         self.new_corpus_button.setEnabled(True)
+        self.settings_button.setEnabled(self.settings_store is not None)
         self.rename_corpus_button.setEnabled(has_corpus)
         self.delete_corpus_button.setEnabled(has_corpus)
         self.add_document_button.setEnabled(has_corpus)

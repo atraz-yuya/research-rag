@@ -627,3 +627,23 @@ GUI foundationを実機で検証し、必要に応じて資料セット名の編
 ### 互換性と安全性
 
 既存CLI syntax、PDF Reader、production Chunker、Embedder、Retriever、RAG service、生成prompt、モデル既定値、duplicate basename ruleは変更していない。新しい外部依存も追加していない。Issue 022の`QtTaskRunner`、close延期、session-level `QApplication`、deterministic DeferredDelete fixture、native crash regression testを維持し、nested `QEventLoop.exec()`や`shiboken6.delete()`は追加していない。
+
+## Issue 024: Add persisted GUI runtime settings
+
+実施日: 2026-08-10
+
+### 実施内容
+
+- immutableな`GuiRuntimeSettings`と、明示的に注入できるINI pathへ`QSettings`で保存する`GuiSettingsStore`を追加した
+- 既定値をembedding=`qwen3-embedding:0.6b`、generation=`qwen3:4b-instruct`、Top-K=`3`、Ollama URL=`http://localhost:11434`とし、空model名、不正Top-K、HTTP(S) hostでないURLを適用前に拒否するようにした
+- 設定画面をnested event loopなしのnon-blocking modal dialogとして追加し、Embedding model、Generation model、Top-K、Ollama URLの編集、Cancel、デフォルト値へのfield resetを実装した
+- GUI設定をcorpus SQLiteとは別の`settings.ini`へatomicに保存し、再起動時はservice生成前に読み込むようにした。初回と不正な保存snapshotは全体を既定値へfallbackする
+- Embedding model設定は新規corpus作成だけに適用し、既存corpusへの質問、追加、再インデックスでは保存済みembedding modelを維持する。選択中corpusの実際のmodelをGUIへ表示した
+- Generation modelとTop-Kは次の質問から即時反映し、Ollama URL変更時はnetwork callを行わずにGUI serviceとdocument managerを同一の新clientへ切り替えるようにした
+- 設定保存に失敗した場合は直前のsettings snapshotと同じclientへrollbackし、live設定と永続設定の不一致を防ぐようにした
+- worker実行中は設定ボタンを無効化し、Issue 022／023のworker ownership、close延期、session-level `QApplication`、DeferredDelete cleanupを維持した
+- fake clientと`tmp_path`を使う単体テストで既定値、validation、round trip、再起動、atomic save failure、Cancel／Reset／OK、既存corpus model保持、即時反映、client共有、busy状態を確認し、実Ollama／networkと実ユーザー設定領域を使用しないようにした
+
+### 互換性と変更していないもの
+
+corpus SQLite schemaはversion 3のまま維持し、既存corpusのindex／document／Chunk／embedding／UUID／`embedding_model`を変更していない。既存CLI syntax、PDF Reader、production Chunker、Embedder、Retriever、RAG serviceのアルゴリズム、生成prompt、worker実装は変更しておらず、新しい外部依存も追加していない。

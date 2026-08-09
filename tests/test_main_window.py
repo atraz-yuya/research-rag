@@ -27,6 +27,11 @@ from research_rag.index_store import (
     StoredRagIndexMetadata,
 )
 from research_rag.gui_worker import QtTaskRunner
+from research_rag.gui_settings import (
+    GuiRuntimeSettings,
+    default_gui_runtime_settings,
+    validate_gui_runtime_settings,
+)
 from research_rag.main_window import MainWindow
 from research_rag.models import Chunk, RagAnswer, SearchResult
 
@@ -48,10 +53,11 @@ def make_corpus(
     index_id: str,
     *documents: StoredDocumentMetadata,
     display_name: str | None = None,
+    embedding_model: str = "embedding-model",
 ) -> StoredRagIndexMetadata:
     return StoredRagIndexMetadata(
         index_id=index_id,
-        embedding_model="embedding-model",
+        embedding_model=embedding_model,
         created_at="2026-08-09T00:00:00Z",
         documents=tuple(documents),
         chunk_count=len(documents),
@@ -83,6 +89,9 @@ def make_inspection(
 
 class StubGuiService:
     def __init__(self) -> None:
+        self.runtime_settings = default_gui_runtime_settings()
+        self.client = StubRuntimeClient(self.runtime_settings.ollama_base_url)
+        self.manager = StubRuntimeManager(self.client)
         first_documents = (
             make_stored_document("first.pdf", "doc-first", 0),
             make_stored_document("second.pdf", "doc-second", 1),
@@ -116,6 +125,28 @@ class StubGuiService:
             ),
         }
         self.calls: list[tuple[Any, ...]] = []
+
+    def apply_runtime_settings(
+        self,
+        settings: GuiRuntimeSettings,
+    ) -> GuiRuntimeSettings:
+        normalized = validate_gui_runtime_settings(settings)
+        if normalized.ollama_base_url != self.runtime_settings.ollama_base_url:
+            self.client = StubRuntimeClient(normalized.ollama_base_url)
+        self.runtime_settings = normalized
+        self.manager.client = self.client
+        self.calls.append(("apply-settings", normalized))
+        return normalized
+
+    def restore_runtime_settings(
+        self,
+        settings: GuiRuntimeSettings,
+        client: object,
+    ) -> None:
+        self.runtime_settings = settings
+        self.client = client
+        self.manager.client = client
+        self.calls.append(("restore-settings", settings, client))
 
     def list_corpora(self) -> tuple[StoredRagIndexMetadata, ...]:
         self.calls.append(("list",))
@@ -215,6 +246,27 @@ class BlockingInspectionService(StubGuiService):
         return self.inspections[index_id]
 
 
+class StubRuntimeClient:
+    def __init__(self, base_url: str) -> None:
+        self.base_url = base_url
+
+
+class StubRuntimeManager:
+    def __init__(self, client: object) -> None:
+        self.client = client
+
+
+class StubSettingsStore:
+    def __init__(self, *, fail: bool = False) -> None:
+        self.fail = fail
+        self.saved: list[GuiRuntimeSettings] = []
+
+    def save(self, settings: GuiRuntimeSettings) -> None:
+        if self.fail:
+            raise OSError("settings are read-only")
+        self.saved.append(settings)
+
+
 class ImmediateTaskRunner:
     def __init__(self) -> None:
         self.submissions = 0
@@ -307,12 +359,18 @@ def make_window(
     *,
     service: StubGuiService | None = None,
     runner: ImmediateTaskRunner | QueuedTaskRunner | None = None,
+    settings_store: StubSettingsStore | None = None,
 ) -> tuple[MainWindow, StubGuiService, ImmediateTaskRunner | QueuedTaskRunner]:
     selected_service = service if service is not None else StubGuiService()
     selected_runner = runner if runner is not None else ImmediateTaskRunner()
     window = MainWindow(
         selected_service,  # type: ignore[arg-type]
         task_runner=selected_runner,
+        settings_store=(
+            settings_store
+            if settings_store is not None
+            else StubSettingsStore()
+        ),  # type: ignore[arg-type]
     )
     return window, selected_service, selected_runner
 
@@ -362,6 +420,131 @@ def test_corpus_list_prefers_display_name_but_keeps_uuid_only_as_item_data(
     assert item.text() == "卒業研究 関連論文"
     assert "uuid-first" not in item.text()
     assert item.data(Qt.ItemDataRole.UserRole) == "uuid-first"
+    window.close()
+
+
+def test_selected_corpus_displays_its_actual_persisted_embedding_model(
+    qt_app: QApplication,
+) -> None:
+    service = StubGuiService()
+    service.corpora[0] = replace(
+        service.corpora[0],
+        embedding_model="stored-corpus-embedding",
+    )
+
+    window, _, _ = make_window(qt_app, service=service)
+
+    assert window.corpus_embedding_model_label.text() == (
+        "使用中のEmbedding model: stored-corpus-embedding"
+    )
+    assert "Embedding model: stored-corpus-embedding" in (
+        window.corpus_list.item(0).toolTip()
+    )
+    window.corpus_list.setCurrentRow(1)
+    assert window.corpus_embedding_model_label.text() == (
+        "使用中のEmbedding model: embedding-model"
+    )
+    window.close()
+
+
+def test_settings_dialog_cancel_keeps_live_and_persisted_settings(
+    qt_app: QApplication,
+) -> None:
+    service = StubGuiService()
+    store = StubSettingsStore()
+    window, _, _ = make_window(
+        qt_app,
+        service=service,
+        settings_store=store,
+    )
+    service.calls.clear()
+
+    window.open_settings()
+    dialog = window._settings_dialog
+    assert dialog is not None
+    assert dialog.embedding_model_input.text() == (
+        service.runtime_settings.embedding_model
+    )
+    dialog.generation_model_input.setText("not-applied")
+    dialog.reject()
+
+    assert window._settings_dialog is None
+    assert service.runtime_settings == default_gui_runtime_settings()
+    assert service.calls == []
+    assert store.saved == []
+    window.close()
+
+
+def test_valid_settings_apply_and_persist_without_background_or_network_work(
+    qt_app: QApplication,
+) -> None:
+    service = StubGuiService()
+    store = StubSettingsStore()
+    window, _, runner = make_window(
+        qt_app,
+        service=service,
+        settings_store=store,
+    )
+    service.calls.clear()
+    submissions_before = runner.submissions
+
+    window.open_settings()
+    dialog = window._settings_dialog
+    assert dialog is not None
+    dialog.embedding_model_input.setText(" future-embedding ")
+    dialog.generation_model_input.setText("future-generation")
+    dialog.top_k_input.setValue(12)
+    dialog.ollama_url_input.setText("https://ollama.example.test:11434/")
+    dialog.accept()
+
+    expected = GuiRuntimeSettings(
+        "future-embedding",
+        "future-generation",
+        12,
+        "https://ollama.example.test:11434",
+    )
+    assert service.runtime_settings == expected
+    assert store.saved == [expected]
+    assert service.client is service.manager.client
+    assert service.client.base_url == expected.ollama_base_url
+    assert runner.submissions == submissions_before
+    assert window.statusBar().currentMessage() == "設定を保存しました"
+    window.close()
+
+
+def test_settings_persistence_failure_rolls_back_live_settings_and_client(
+    qt_app: QApplication,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = StubGuiService()
+    store = StubSettingsStore(fail=True)
+    window, _, _ = make_window(
+        qt_app,
+        service=service,
+        settings_store=store,
+    )
+    previous_settings = service.runtime_settings
+    previous_client = service.client
+    errors: list[str] = []
+    monkeypatch.setattr(window, "_show_error", errors.append)
+    service.calls.clear()
+
+    window.open_settings()
+    dialog = window._settings_dialog
+    assert dialog is not None
+    dialog.generation_model_input.setText("new-generation")
+    dialog.ollama_url_input.setText("http://new.example.test:11434")
+    dialog.accept()
+
+    assert errors == ["settings are read-only"]
+    assert service.runtime_settings == previous_settings
+    assert service.client is previous_client
+    assert service.manager.client is previous_client
+    assert store.saved == []
+    assert [call[0] for call in service.calls] == [
+        "apply-settings",
+        "restore-settings",
+    ]
     window.close()
 
 
@@ -831,11 +1014,13 @@ def test_queued_work_disables_actions_and_success_restores_idle_state(
     assert service.calls == [("list",)]
     assert len(runner.tasks) == 1
     assert not window.new_corpus_button.isEnabled()
+    assert not window.settings_button.isEnabled()
 
     runner.succeed_next()
 
     assert service.calls[-1] == ("inspect", "uuid-first")
     assert window.new_corpus_button.isEnabled()
+    assert window.settings_button.isEnabled()
     assert window.statusBar().currentMessage() == "準備完了"
 
     window.question_input.setText("Question?")
