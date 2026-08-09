@@ -354,7 +354,7 @@ def test_answer_question_from_pdf_connects_pipeline_and_preserves_sources(
             [question],
             "shared-embedding-model",
         ),
-        ("retriever", [1.0, 0.0], embedded_chunks, 2),
+        ("retriever", [1.0, 0.0], tuple(embedded_chunks), 2),
         (
             "answer_generator",
             question,
@@ -475,7 +475,7 @@ def test_answer_question_from_pdfs_uses_one_shared_global_pipeline(
             client,
         ),
         ("query_embedder", [question], "shared-embedding-model"),
-        ("retriever", [1.0, 0.0], embedded_chunks, 2),
+        ("retriever", [1.0, 0.0], tuple(embedded_chunks), 2),
         (
             "answer_generator",
             question,
