@@ -17,6 +17,7 @@
 - 準備済みindex全体をSQLiteへ保存・一覧・読込・削除できる
 - 永続corpusの各文書についてsource fileの状態を確認できる
 - 永続corpusへ文書単位で追加・削除・再indexできる
+- 永続corpusへ任意の表示名を付け、名前変更とcorpus全体の削除ができる
 - PySide6デスクトップGUIで保存済み資料セットを管理し、質問できる
 - GUIで資料セット内の文書名、source path、`CURRENT`／`MODIFIED`／`MISSING`／`UNKNOWN`状態を確認できる
 
@@ -59,13 +60,15 @@
 
 ## SQLite永続化仕様
 
-`SQLiteRagIndexStore`が永続化だけを担当し、`RagIndex`はSQLite connectionや永続IDを保持しない。Python標準の`sqlite3`、`uuid`、`struct`だけを使い、schema version 2を`store_metadata`へ明示する。schema v1は明示的な1段階migrationでtransactionallyにv2へ移行し、既存データと永続IDを維持する。v1以外の未対応versionはmigrationを推測せずエラーにする。
+`SQLiteRagIndexStore`が永続化だけを担当し、`RagIndex`はSQLite connectionや永続IDを保持しない。Python標準の`sqlite3`、`uuid`、`struct`だけを使い、schema version 3を`store_metadata`へ明示する。schema v1／v2は1つのtransaction内でv1→v2→v3の順に明示的に移行し、全migration成功後にだけversionを3へ更新する。既存データと永続IDを維持し、未対応versionはmigrationを推測せずエラーにする。
 
 indexと各documentにはUUIDを割り当て、documentの入力順、名前、正規化した絶対source pathを保存する。Chunkは全PDF横断の順序、PDF名、1始まりページ番号、page内chunk index、本文を保持する。source PDFが削除または一時的に利用不能でも、保存済みChunkとembeddingから`RagIndex`を復元できる。
 
 embeddingはpickleを使わずlittle-endian IEEE-754 float64 BLOBとして保存し、dimensionも別列へ保存する。load時にdimension、BLOB長、非有限値を検査し、破損したindexを部分的に返さない。
 
 各documentにはnullableな`content_sha256`、`file_size`、`mtime_ns`、`indexed_at`も保存する。schema v1から移行した文書ではこれらをNULLに保ち、保存済みembeddingが現在のsource file由来だと推測しない。schema v2では`index_id`と`document_id`の複合外部キーにより、別indexのdocumentへChunkを関連付けられないようにする。
+
+schema v3では`rag_indexes.display_name`をnullableな表示metadataとして保存する。`index_id`がdurable identityであり、名前変更でindex／document IDやembeddingを変更しない。表示名は前後空白を除去し、空文字と100文字超を拒否する一方、異なるcorpus間の重複は許可する。v1／v2から移行したcorpusでは名前をNULLに保ち、GUIは従来の先頭PDF名と文書数によるラベルへfallbackする。
 
 1つのindex保存と各document mutationはそれぞれ単一transactionで行い、途中失敗時は全行をrollbackする。index削除時はforeign key cascadeでdocumentとchunkも削除する。`list_indexes()`と`get_index_metadata()`はembedding BLOBを読み込まず、軽量metadataだけを返す。既存CLIは自動的にdatabaseを開かず、永続化用の新しいCLI構文も追加しない。
 
@@ -87,9 +90,9 @@ GUIは`python -m research_rag.gui_app`で起動する。既存CLIの構文・既
 
 GUIの既定DBは`QStandardPaths.AppDataLocation`配下の`indexes.sqlite3`とする。テストではDB pathを注入し、実ユーザーデータ領域へ書き込まない。元PDFはアプリケーションデータ領域へコピーせず、資料の削除でも元PDFを削除しない。
 
-起動時は`SQLiteRagIndexStore.list_indexes()`の軽量metadataから保存済み資料セットを表示し、UUIDは内部item dataとして保持する。資料セット選択時は`PersistentRagDocumentManager.inspect_documents()`を使い、文書順を保って文書名、状態、source pathを表示する。
+起動時は`SQLiteRagIndexStore.list_indexes()`の軽量metadataから保存済み資料セットを表示し、永続表示名を優先する。名前がない既存corpusはPDF名ベースのラベルを使い、UUIDは内部item dataとして保持して表示文字列から解析しない。資料セット選択時は`PersistentRagDocumentManager.inspect_documents()`を使い、文書順を保って文書名、状態、source pathを表示する。
 
-新規資料セットは1つ以上のPDFから作成でき、選択中の資料セットにはPDFを1件ずつ追加できる。選択文書は保存済みsource pathから再インデックスでき、削除前には確認ダイアログで元PDFが削除されないことを明示する。状態更新はfilesystem fingerprintだけを確認し、PDF extractionやOllamaを実行しない。
+新規資料セットは1つ以上のPDFと表示名からatomicに作成でき、選択中の資料セットはRAG内容やUUIDを変えずに名前変更できる。選択中の資料セットにはPDFを1件ずつ追加でき、選択文書は保存済みsource pathから再インデックスできる。文書削除と資料セット全体の削除では、確認ダイアログで元PDFが削除されないことを明示する。資料セット全体の削除は既存workerを使ってSQLite内の関連行をcascade削除し、最後の資料セットを削除した後は文書・回答・参照表示を空にする。状態更新はfilesystem fingerprintだけを確認し、PDF extractionやOllamaを実行しない。
 
 質問時は保存済みindexをloadし、`answer_question_from_index()`を使用する。回答本文と、各参照元のrank、PDF名、PDFごとに1始まりのページ番号、cosine similarity score、source textを表示する。会話履歴は保持しない。
 

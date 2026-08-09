@@ -61,12 +61,27 @@ class RagGuiService:
     def create_corpus(
         self,
         pdf_paths: Sequence[Path],
+        *,
+        display_name: str | None = None,
     ) -> StoredRagIndexMetadata:
         """Create a managed persistent corpus from one or more PDFs."""
         return self.manager.create_index(
             pdf_paths,
             embedding_model=self.embedding_model,
+            display_name=display_name,
         )
+
+    def rename_corpus(
+        self,
+        index_id: str,
+        display_name: str,
+    ) -> StoredRagIndexMetadata:
+        """Rename a corpus without loading or rebuilding its RAG contents."""
+        return self.store.rename_index(index_id, display_name)
+
+    def delete_corpus(self, index_id: str) -> bool:
+        """Delete indexed corpus data without touching original PDFs."""
+        return self.store.delete_index(index_id)
 
     def add_document(
         self,
@@ -109,6 +124,8 @@ class RagGuiService:
 
 def format_corpus_label(metadata: StoredRagIndexMetadata) -> str:
     """Derive a stable human-readable label without exposing the UUID."""
+    if metadata.display_name and metadata.display_name.strip():
+        return metadata.display_name
     if not metadata.documents:
         return "資料なし"
     first_name = metadata.documents[0].document_name

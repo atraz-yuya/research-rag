@@ -122,6 +122,25 @@ def test_create_index_stores_verified_fingerprints_and_current_status(
     assert builder.calls == [(source_paths[:2], "stored-model", client)]
 
 
+def test_create_index_persists_display_name_in_verified_save(
+    store: SQLiteRagIndexStore,
+    source_paths: tuple[Path, Path, Path],
+    builder: RecordingBuilder,
+) -> None:
+    manager = _manager(store)
+
+    metadata = manager.create_index(
+        source_paths[:2],
+        embedding_model="stored-model",
+        display_name="  研究資料 A  ",
+    )
+
+    assert metadata.display_name == "研究資料 A"
+    assert store.get_index_metadata(metadata.index_id).display_name == (
+        "研究資料 A"
+    )
+
+
 def test_create_aborts_without_saving_when_source_changes_during_build(
     store: SQLiteRagIndexStore,
     source_paths: tuple[Path, Path, Path],

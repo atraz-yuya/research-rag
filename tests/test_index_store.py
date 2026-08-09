@@ -59,7 +59,7 @@ def table_count(db_path: Path, table_name: str) -> int:
     return row[0]
 
 
-def test_initialize_creates_schema_version_two_and_is_idempotent(
+def test_initialize_creates_schema_version_three_and_is_idempotent(
     tmp_path: Path,
 ) -> None:
     db_path = tmp_path / "nested" / "indexes.sqlite3"
@@ -79,6 +79,10 @@ def test_initialize_creates_schema_version_two_and_is_idempotent(
                 "SELECT name FROM sqlite_master WHERE type = 'table'"
             )
         }
+        index_columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(rag_indexes)")
+        }
     assert version == (str(SCHEMA_VERSION),)
     assert {
         "store_metadata",
@@ -86,6 +90,7 @@ def test_initialize_creates_schema_version_two_and_is_idempotent(
         "rag_documents",
         "rag_chunks",
     } <= tables
+    assert "display_name" in index_columns
 
 
 def test_initialize_rejects_unsupported_schema_version(tmp_path: Path) -> None:
@@ -101,7 +106,7 @@ def test_initialize_rejects_unsupported_schema_version(tmp_path: Path) -> None:
 
     with pytest.raises(
         RagIndexStoreError,
-        match=r"Unsupported.*99.*expected 2",
+        match=r"Unsupported.*99.*expected 3",
     ):
         SQLiteRagIndexStore(db_path).initialize()
 
@@ -129,6 +134,8 @@ def test_save_returns_uuid_metadata_and_persists_all_documents(
 
     assert str(UUID(metadata.index_id)) == metadata.index_id
     assert metadata.embedding_model == "embedding-model"
+    assert metadata.display_name is None
+    assert store.get_index_metadata(metadata.index_id).display_name is None
     assert metadata.created_at.endswith("Z")
     assert metadata.chunk_count == 2
     assert [document.position for document in metadata.documents] == [0, 1, 2]
@@ -163,6 +170,61 @@ def test_save_returns_uuid_metadata_and_persists_all_documents(
         (1, "empty.pdf", str(source_paths[1].resolve(strict=False))),
         (2, "second.pdf", str(source_paths[2].resolve(strict=False))),
     ]
+
+
+def test_save_with_display_name_normalizes_and_persists_it_atomically(
+    store: SQLiteRagIndexStore,
+    tmp_path: Path,
+) -> None:
+    fingerprints = (
+        SourceFingerprint("a" * 64, 10, 100),
+        SourceFingerprint("b" * 64, 20, 200),
+        SourceFingerprint("c" * 64, 30, 300),
+    )
+
+    metadata = store.save_verified_index(
+        make_index(),
+        make_source_paths(tmp_path),
+        fingerprints,
+        display_name="  卒業研究 関連論文  ",
+    )
+
+    assert metadata.display_name == "卒業研究 関連論文"
+    assert store.get_index_metadata(metadata.index_id).display_name == (
+        "卒業研究 関連論文"
+    )
+    assert store.list_indexes()[0].display_name == "卒業研究 関連論文"
+
+
+@pytest.mark.parametrize("display_name", ["", "  \n ", "x" * 101])
+def test_save_rejects_invalid_display_name_before_database_write(
+    store: SQLiteRagIndexStore,
+    tmp_path: Path,
+    display_name: str,
+) -> None:
+    with pytest.raises(ValueError, match="display_name"):
+        store.save_index(
+            make_index(),
+            make_source_paths(tmp_path),
+            display_name=display_name,
+        )
+
+    assert table_count(store.db_path, "rag_indexes") == 0
+
+
+def test_invalid_display_name_is_rejected_before_opening_database(
+    tmp_path: Path,
+) -> None:
+    uninitialized = SQLiteRagIndexStore(tmp_path / "missing" / "store.sqlite3")
+
+    with pytest.raises(ValueError, match="display_name"):
+        uninitialized.save_index(
+            make_index(),
+            make_source_paths(tmp_path),
+            display_name="   ",
+        )
+
+    assert not uninitialized.db_path.exists()
 
 
 @pytest.mark.parametrize(
@@ -399,6 +461,30 @@ def test_list_indexes_returns_lightweight_newest_first_metadata(
         raise AssertionError("list_indexes must not hydrate embeddings")
 
     monkeypatch.setattr(store, "_deserialize_embedding", unexpected_deserialize)
+    original_open_connection = store._open_connection
+
+    def open_without_embedding_access() -> sqlite3.Connection:
+        connection = original_open_connection()
+
+        def deny_embedding_reads(
+            operation: int,
+            table_name: str | None,
+            column_name: str | None,
+            database_name: str | None,
+            trigger_name: str | None,
+        ) -> int:
+            if (
+                operation == sqlite3.SQLITE_READ
+                and table_name == "rag_chunks"
+                and column_name == "embedding"
+            ):
+                return sqlite3.SQLITE_DENY
+            return sqlite3.SQLITE_OK
+
+        connection.set_authorizer(deny_embedding_reads)
+        return connection
+
+    monkeypatch.setattr(store, "_open_connection", open_without_embedding_access)
 
     items = store.list_indexes()
 
@@ -410,6 +496,90 @@ def test_list_indexes_returns_lightweight_newest_first_metadata(
         "empty.pdf",
         "second.pdf",
     ]
+
+
+def test_rename_normalizes_name_without_changing_ids_or_embeddings(
+    store: SQLiteRagIndexStore,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_index = make_index()
+    saved = store.save_index(original_index, make_source_paths(tmp_path))
+    original_document_ids = tuple(
+        document.document_id for document in saved.documents
+    )
+    with sqlite3.connect(store.db_path) as connection:
+        original_embeddings = connection.execute(
+            """
+            SELECT chunk_id, embedding
+            FROM rag_chunks
+            WHERE index_id = ?
+            ORDER BY position
+            """,
+            (saved.index_id,),
+        ).fetchall()
+
+    def unexpected_deserialize(*args: object, **kwargs: object) -> None:
+        raise AssertionError("rename must not deserialize embeddings")
+
+    monkeypatch.setattr(store, "_deserialize_embedding", unexpected_deserialize)
+    renamed = store.rename_index(saved.index_id, "  研究資料 A  ")
+
+    assert renamed.index_id == saved.index_id
+    assert renamed.display_name == "研究資料 A"
+    assert tuple(
+        document.document_id for document in renamed.documents
+    ) == original_document_ids
+    with sqlite3.connect(store.db_path) as connection:
+        renamed_embeddings = connection.execute(
+            """
+            SELECT chunk_id, embedding
+            FROM rag_chunks
+            WHERE index_id = ?
+            ORDER BY position
+            """,
+            (saved.index_id,),
+        ).fetchall()
+    assert renamed_embeddings == original_embeddings
+
+
+def test_rename_allows_duplicate_display_names(
+    store: SQLiteRagIndexStore,
+    tmp_path: Path,
+) -> None:
+    first = store.save_index(make_index(), make_source_paths(tmp_path))
+    second = store.save_index(make_index(), make_source_paths(tmp_path))
+
+    store.rename_index(first.index_id, "共通名")
+    store.rename_index(second.index_id, "共通名")
+
+    assert [item.display_name for item in store.list_indexes()] == [
+        "共通名",
+        "共通名",
+    ]
+
+
+@pytest.mark.parametrize("display_name", ["", " \n ", "名" * 101])
+def test_rename_rejects_invalid_display_names(
+    store: SQLiteRagIndexStore,
+    tmp_path: Path,
+    display_name: str,
+) -> None:
+    saved = store.save_index(make_index(), make_source_paths(tmp_path))
+
+    with pytest.raises(ValueError, match="display_name"):
+        store.rename_index(saved.index_id, display_name)
+
+    assert store.get_index_metadata(saved.index_id).display_name is None
+
+
+def test_rename_missing_index_fails_clearly(
+    store: SQLiteRagIndexStore,
+) -> None:
+    missing_id = "00000000-0000-0000-0000-000000000099"
+
+    with pytest.raises(KeyError, match="does not exist"):
+        store.rename_index(missing_id, "Missing")
 
 
 def test_delete_returns_status_cascades_rows_and_preserves_sources(
@@ -441,7 +611,11 @@ def test_failed_save_rolls_back_index_document_and_chunk_rows(
     monkeypatch.setattr(store, "_insert_chunks", failing_insert_chunks)
 
     with pytest.raises(RagIndexStoreError, match="Failed to save"):
-        store.save_index(make_index(), make_source_paths(tmp_path))
+        store.save_index(
+            make_index(),
+            make_source_paths(tmp_path),
+            display_name="Atomic name",
+        )
 
     assert table_count(store.db_path, "rag_indexes") == 0
     assert table_count(store.db_path, "rag_documents") == 0
@@ -467,6 +641,8 @@ def test_load_and_delete_reject_invalid_index_ids_before_database_work(
         uninitialized.load_index(index_id)
     with pytest.raises(ValueError, match=message):
         uninitialized.delete_index(index_id)
+    with pytest.raises(ValueError, match=message):
+        uninitialized.rename_index(index_id, "Name")
 
     assert not uninitialized.db_path.exists()
 
@@ -571,6 +747,32 @@ def _create_schema_v1_store(
     return original
 
 
+def _create_schema_v2_store(db_path: Path) -> RagIndex:
+    original = _create_schema_v1_store(db_path)
+    store = SQLiteRagIndexStore(db_path)
+    with sqlite3.connect(db_path) as connection:
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute("BEGIN IMMEDIATE")
+        store._migrate_v1_to_v2(connection)
+        connection.execute(
+            "UPDATE store_metadata SET value = '2' WHERE key = 'schema_version'"
+        )
+        connection.execute(
+            """
+            UPDATE rag_documents
+            SET
+                content_sha256 = ?,
+                file_size = ?,
+                mtime_ns = ?,
+                indexed_at = ?
+            """,
+            ("a" * 64, 123, 456, "2026-08-02T00:00:00Z"),
+        )
+        connection.commit()
+    return original
+
+
 def test_initialize_migrates_v1_transactionally_without_changing_data(
     tmp_path: Path,
 ) -> None:
@@ -593,17 +795,131 @@ def test_initialize_migrates_v1_transactionally_without_changing_data(
     assert metadata.documents[0].file_size is None
     assert metadata.documents[0].mtime_ns is None
     assert metadata.documents[0].indexed_at is None
+    assert metadata.display_name is None
     with sqlite3.connect(db_path) as connection:
         version = connection.execute(
             "SELECT value FROM store_metadata WHERE key = 'schema_version'"
         ).fetchone()
-        chunk_id = connection.execute(
-            "SELECT chunk_id FROM rag_chunks"
+        chunk_row = connection.execute(
+            "SELECT chunk_id, embedding FROM rag_chunks"
         ).fetchone()
         foreign_key_errors = connection.execute("PRAGMA foreign_key_check").fetchall()
-    assert version == ("2",)
-    assert chunk_id == (7,)
+    assert version == ("3",)
+    assert chunk_row == (7, struct.pack("<2d", 0.25, -0.75))
     assert foreign_key_errors == []
+
+
+def test_initialize_migrates_v2_to_v3_without_changing_persistent_data(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "version-two.sqlite3"
+    original = _create_schema_v2_store(db_path)
+    with sqlite3.connect(db_path) as connection:
+        before_ids_and_embedding = connection.execute(
+            """
+            SELECT i.index_id, d.document_id, c.chunk_id, c.embedding
+            FROM rag_indexes AS i
+            JOIN rag_documents AS d ON d.index_id = i.index_id
+            JOIN rag_chunks AS c
+                ON c.index_id = d.index_id AND c.document_id = d.document_id
+            """
+        ).fetchone()
+
+    migrated = SQLiteRagIndexStore(db_path)
+    migrated.initialize()
+
+    metadata = migrated.get_index_metadata(
+        "00000000-0000-0000-0000-000000000101"
+    )
+    assert migrated.load_index(metadata.index_id) == original
+    assert metadata.display_name is None
+    assert metadata.documents[0].content_sha256 == "a" * 64
+    assert metadata.documents[0].file_size == 123
+    assert metadata.documents[0].mtime_ns == 456
+    assert metadata.documents[0].indexed_at == "2026-08-02T00:00:00Z"
+    with sqlite3.connect(db_path) as connection:
+        version = connection.execute(
+            "SELECT value FROM store_metadata WHERE key = 'schema_version'"
+        ).fetchone()
+        after_ids_and_embedding = connection.execute(
+            """
+            SELECT i.index_id, d.document_id, c.chunk_id, c.embedding
+            FROM rag_indexes AS i
+            JOIN rag_documents AS d ON d.index_id = i.index_id
+            JOIN rag_chunks AS c
+                ON c.index_id = d.index_id AND c.document_id = d.document_id
+            """
+        ).fetchone()
+    assert version == ("3",)
+    assert after_ids_and_embedding == before_ids_and_embedding
+
+
+def test_failed_v2_to_v3_migration_rolls_back_without_claiming_v3(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "version-two.sqlite3"
+    _create_schema_v2_store(db_path)
+    migrating = SQLiteRagIndexStore(db_path)
+
+    def fail_after_schema_change(connection: sqlite3.Connection) -> None:
+        connection.execute(
+            "ALTER TABLE rag_indexes ADD COLUMN display_name TEXT NULL"
+        )
+        raise sqlite3.OperationalError("simulated v3 migration failure")
+
+    monkeypatch.setattr(migrating, "_migrate_v2_to_v3", fail_after_schema_change)
+
+    with pytest.raises(sqlite3.OperationalError, match="simulated v3"):
+        migrating.initialize()
+
+    with sqlite3.connect(db_path) as connection:
+        version = connection.execute(
+            "SELECT value FROM store_metadata WHERE key = 'schema_version'"
+        ).fetchone()
+        columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(rag_indexes)")
+        }
+    assert version == ("2",)
+    assert "display_name" not in columns
+
+
+def test_v1_to_v3_rolls_back_both_steps_when_v3_migration_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "version-one.sqlite3"
+    _create_schema_v1_store(db_path)
+    migrating = SQLiteRagIndexStore(db_path)
+
+    def fail_v3(connection: sqlite3.Connection) -> None:
+        connection.execute(
+            "ALTER TABLE rag_indexes ADD COLUMN display_name TEXT NULL"
+        )
+        raise sqlite3.OperationalError("simulated sequential migration failure")
+
+    monkeypatch.setattr(migrating, "_migrate_v2_to_v3", fail_v3)
+
+    with pytest.raises(sqlite3.OperationalError, match="simulated sequential"):
+        migrating.initialize()
+
+    with sqlite3.connect(db_path) as connection:
+        version = connection.execute(
+            "SELECT value FROM store_metadata WHERE key = 'schema_version'"
+        ).fetchone()
+        document_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(rag_documents)")
+        }
+        index_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(rag_indexes)")
+        }
+        chunk = connection.execute(
+            "SELECT chunk_id, embedding FROM rag_chunks"
+        ).fetchone()
+    assert version == ("1",)
+    assert "content_sha256" not in document_columns
+    assert "display_name" not in index_columns
+    assert chunk == (7, struct.pack("<2d", 0.25, -0.75))
 
 
 def test_failed_v1_migration_rolls_back_schema_and_version(

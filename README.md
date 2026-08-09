@@ -6,7 +6,7 @@
 
 ## 現在の開発段階
 
-テキストを含む1つ以上のPDFへ質問できるCLI版MVPと、保存済み資料セットを管理して質問できるPySide6デスクトップGUIを実装済みです。選択したPDFを1つの共有検索空間として扱い、ページ境界を保って全文書を横断検索します。Ollamaが生成した回答と、根拠となるPDF名・ページ番号・類似度・文章を表示します。SQLiteへ保存した資料セットでは、文書の変更検出と文書単位の追加・削除・再インデックスも利用できます。
+テキストを含む1つ以上のPDFへ質問できるCLI版MVPと、保存済み資料セットを管理して質問できるPySide6デスクトップGUIを実装済みです。選択したPDFを1つの共有検索空間として扱い、ページ境界を保って全文書を横断検索します。Ollamaが生成した回答と、根拠となるPDF名・ページ番号・類似度・文章を表示します。SQLiteへ保存した資料セットでは、表示名の作成・変更・資料セット全体の削除、文書の変更検出と文書単位の追加・削除・再インデックスも利用できます。
 
 MVPの範囲と完了条件は [`docs/mvp_spec.md`](docs/mvp_spec.md) を参照してください。
 
@@ -102,7 +102,7 @@ db_path = Path.home() / ".research-rag" / "indexes.sqlite3"
 
 store = SQLiteRagIndexStore(db_path)
 store.initialize()
-metadata = store.save_index(index, pdf_paths)
+metadata = store.save_index(index, pdf_paths, display_name="卒業研究 関連論文")
 
 # 別プロセス相当の新しいstore instanceから読み込む
 reopened_store = SQLiteRagIndexStore(db_path)
@@ -110,10 +110,11 @@ reopened_store.initialize()
 loaded_index = reopened_store.load_index(metadata.index_id)
 
 saved_indexes = reopened_store.list_indexes()
+renamed = reopened_store.rename_index(metadata.index_id, "研究資料 2026")
 deleted = reopened_store.delete_index(metadata.index_id)
 ```
 
-保存形式はschema version 2です。schema version 1のDBは`initialize()`時にtransaction内でv2へ移行し、既存のindex・文書・Chunk・embeddingを維持します。文書・indexには永続UUIDを付け、embeddingはpickleを使わずlittle-endian IEEE-754 float64 BLOBとして保存します。元PDFの絶対source pathも管理情報として保持しますが、loadや質問時にPDFが存在する必要はありません。現在のCLIは永続化を自動的に使用せず、構文も従来どおりです。
+保存形式はschema version 3です。schema version 1／2のDBは`initialize()`時に1つのtransaction内でv1→v2→v3の順に移行し、既存のindex・文書・Chunk・embedding・UUIDを維持します。資料セットの`display_name`は表示専用metadataで、機械的な永続identityは引き続き`index_id`です。移行した既存資料セットの名前はNULLのままとし、GUIでは名前を設定するまで従来のPDF名ベース表示へfallbackします。文書・indexには永続UUIDを付け、embeddingはpickleを使わずlittle-endian IEEE-754 float64 BLOBとして保存します。元PDFの絶対source pathも管理情報として保持しますが、loadや質問時にPDFが存在する必要はありません。現在のCLIは永続化を自動的に使用せず、構文も従来どおりです。
 
 ## 永続corpusの文書管理
 
@@ -133,6 +134,7 @@ manager = PersistentRagDocumentManager(store, client=OllamaClient())
 metadata = manager.create_index(
     [Path("main-paper.pdf"), Path("supplement.pdf")],
     embedding_model="qwen3-embedding:0.6b",
+    display_name="卒業研究 関連論文",
 )
 
 statuses = manager.inspect_documents(metadata.index_id)
@@ -158,7 +160,7 @@ ollama pull qwen3:4b-instruct
 python -m research_rag.gui_app
 ```
 
-GUIでは、保存済み資料セットの一覧、文書の`CURRENT`／`MODIFIED`／`MISSING`／`UNKNOWN`状態、source pathを確認できます。複数PDFからの資料セット作成、PDFの追加、選択文書の再インデックスと削除、状態更新、資料セットへの質問に対応します。削除はSQLite内の索引対象だけに作用し、元PDFファイルそのものは削除しません。
+GUIでは、保存済み資料セットの一覧、文書の`CURRENT`／`MODIFIED`／`MISSING`／`UNKNOWN`状態、source pathを確認できます。複数PDFから名前付き資料セットを作成し、後から名前を変更できます。PDFの追加、選択文書の再インデックスと削除、状態更新、資料セットへの質問にも対応します。`資料セットを削除`は、その資料セットに属するSQLite内のindex・文書・Chunk・embeddingをまとめて削除しますが、元PDFファイルそのものは削除しません。表示名の重複は許可され、内部のUUIDで資料セットを区別します。
 
 既定のSQLite DBはQtの`QStandardPaths.AppDataLocation`配下に作成されます。macOSでは通常、`~/Library/Application Support/ResearchRAG/indexes.sqlite3`です。元PDFの本文はSQLiteへChunkとembeddingとして保存されますが、元PDFファイルをアプリケーションデータ領域へコピーしません。そのため、追加後に元PDFを移動・変更・削除すると、状態はそれぞれ`MISSING`または`MODIFIED`になります。保存済みChunkは引き続き質問に利用でき、再インデックスには元のsource pathにPDFが必要です。
 

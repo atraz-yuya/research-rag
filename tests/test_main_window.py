@@ -6,6 +6,7 @@ import gc
 import time
 import weakref
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from threading import Event
 from typing import Any
@@ -46,6 +47,7 @@ def make_stored_document(
 def make_corpus(
     index_id: str,
     *documents: StoredDocumentMetadata,
+    display_name: str | None = None,
 ) -> StoredRagIndexMetadata:
     return StoredRagIndexMetadata(
         index_id=index_id,
@@ -53,6 +55,7 @@ def make_corpus(
         created_at="2026-08-09T00:00:00Z",
         documents=tuple(documents),
         chunk_count=len(documents),
+        display_name=display_name,
     )
 
 
@@ -125,10 +128,16 @@ class StubGuiService:
     def create_corpus(
         self,
         pdf_paths: tuple[Path, ...],
+        *,
+        display_name: str | None = None,
     ) -> StoredRagIndexMetadata:
-        self.calls.append(("create", tuple(pdf_paths)))
+        self.calls.append(("create", tuple(pdf_paths), display_name))
         document = make_stored_document("created.pdf", "doc-created", 0)
-        metadata = make_corpus("uuid-created", document)
+        metadata = make_corpus(
+            "uuid-created",
+            document,
+            display_name=display_name,
+        )
         self.corpora.append(metadata)
         self.inspections[metadata.index_id] = (
             make_inspection(
@@ -138,6 +147,30 @@ class StubGuiService:
             ),
         )
         return metadata
+
+    def rename_corpus(
+        self,
+        index_id: str,
+        display_name: str,
+    ) -> StoredRagIndexMetadata:
+        self.calls.append(("rename-corpus", index_id, display_name))
+        position = next(
+            position
+            for position, corpus in enumerate(self.corpora)
+            if corpus.index_id == index_id
+        )
+        renamed = replace(self.corpora[position], display_name=display_name)
+        self.corpora[position] = renamed
+        return renamed
+
+    def delete_corpus(self, index_id: str) -> bool:
+        self.calls.append(("delete-corpus", index_id))
+        original_count = len(self.corpora)
+        self.corpora = [
+            corpus for corpus in self.corpora if corpus.index_id != index_id
+        ]
+        self.inspections.pop(index_id, None)
+        return len(self.corpora) < original_count
 
     def add_document(self, index_id: str, pdf_path: Path):  # type: ignore[no-untyped-def]
         self.calls.append(("add", index_id, pdf_path))
@@ -314,6 +347,24 @@ def test_main_window_constructs_and_startup_lists_corpora_without_loading(
     window.close()
 
 
+def test_corpus_list_prefers_display_name_but_keeps_uuid_only_as_item_data(
+    qt_app: QApplication,
+) -> None:
+    service = StubGuiService()
+    service.corpora[0] = replace(
+        service.corpora[0],
+        display_name="卒業研究 関連論文",
+    )
+
+    window, _, _ = make_window(qt_app, service=service)
+
+    item = window.corpus_list.item(0)
+    assert item.text() == "卒業研究 関連論文"
+    assert "uuid-first" not in item.text()
+    assert item.data(Qt.ItemDataRole.UserRole) == "uuid-first"
+    window.close()
+
+
 def test_plain_widget_tree_is_deterministically_deleted_without_rag(
     qt_app: QApplication,
     delete_qt_widget: Callable[[Any], None],
@@ -425,6 +476,58 @@ def test_create_cancel_performs_no_service_or_worker_call(
     window.close()
 
 
+def test_name_dialog_cancel_after_file_selection_creates_nothing(
+    qt_app: QApplication,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window, service, runner = make_window(qt_app)
+    service.calls.clear()
+    initial_submissions = runner.submissions
+    monkeypatch.setattr(
+        window,
+        "_choose_corpus_pdfs",
+        lambda: (Path("selected.pdf"),),
+    )
+    captured: list[tuple[str, str]] = []
+
+    def cancel_name(*, title: str, initial_value: str) -> None:
+        captured.append((title, initial_value))
+        return None
+
+    monkeypatch.setattr(window, "_choose_corpus_name", cancel_name)
+
+    window.create_corpus()
+
+    assert captured == [("資料セット名", "selected")]
+    assert service.calls == []
+    assert runner.submissions == initial_submissions
+    window.close()
+
+
+def test_empty_create_name_is_rejected_before_worker_submission(
+    qt_app: QApplication,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window, service, runner = make_window(qt_app)
+    service.calls.clear()
+    initial_submissions = runner.submissions
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        window,
+        "_choose_corpus_pdfs",
+        lambda: (Path("selected.pdf"),),
+    )
+    monkeypatch.setattr(window, "_choose_corpus_name", lambda **_: " \n ")
+    monkeypatch.setattr(window, "_show_warning", warnings.append)
+
+    window.create_corpus()
+
+    assert warnings == ["資料セット名を入力してください。"]
+    assert service.calls == []
+    assert runner.submissions == initial_submissions
+    window.close()
+
+
 def test_successful_create_refreshes_and_selects_new_corpus(
     qt_app: QApplication,
     monkeypatch: pytest.MonkeyPatch,
@@ -432,14 +535,181 @@ def test_successful_create_refreshes_and_selects_new_corpus(
     window, service, _ = make_window(qt_app)
     selected = (Path("created.pdf"), Path("support.pdf"))
     monkeypatch.setattr(window, "_choose_corpus_pdfs", lambda: selected)
+    monkeypatch.setattr(
+        window,
+        "_choose_corpus_name",
+        lambda **_: "  研究資料 A  ",
+    )
     service.calls.clear()
 
     window.create_corpus()
 
-    assert ("create", selected) in service.calls
+    assert ("create", selected, "研究資料 A") in service.calls
     assert window.selected_index_id() == "uuid-created"
-    assert window.corpus_list.currentItem().text() == "created.pdf"
+    assert window.corpus_list.currentItem().text() == "研究資料 A"
     assert ("inspect", "uuid-created") in service.calls
+    window.close()
+
+
+def test_rename_cancel_performs_no_service_or_worker_call(
+    qt_app: QApplication,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window, service, runner = make_window(qt_app)
+    service.calls.clear()
+    initial_submissions = runner.submissions
+    monkeypatch.setattr(window, "_choose_corpus_name", lambda **_: None)
+
+    window.rename_corpus()
+
+    assert service.calls == []
+    assert runner.submissions == initial_submissions
+    assert window.selected_index_id() == "uuid-first"
+    window.close()
+
+
+def test_successful_rename_keeps_uuid_selection_and_answer_state(
+    qt_app: QApplication,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window, service, runner = make_window(qt_app)
+    window.answer_output.setPlainText("Keep answer")
+    window.sources_output.setPlainText("Keep sources")
+    monkeypatch.setattr(
+        window,
+        "_choose_corpus_name",
+        lambda **_: "  研究資料 B  ",
+    )
+    service.calls.clear()
+    initial_submissions = runner.submissions
+
+    window.rename_corpus()
+
+    assert ("rename-corpus", "uuid-first", "研究資料 B") in service.calls
+    assert window.selected_index_id() == "uuid-first"
+    assert window.corpus_list.currentItem().text() == "研究資料 B"
+    assert window.answer_output.toPlainText() == "Keep answer"
+    assert window.sources_output.toPlainText() == "Keep sources"
+    assert runner.submissions == initial_submissions + 2
+    window.close()
+
+
+def test_rename_is_disabled_without_selection_and_empty_name_is_rejected(
+    qt_app: QApplication,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    empty_service = StubGuiService()
+    empty_service.corpora = []
+    window, _, _ = make_window(qt_app, service=empty_service)
+    assert not window.rename_corpus_button.isEnabled()
+    assert not window.delete_corpus_button.isEnabled()
+    window.close()
+
+    window, service, runner = make_window(qt_app)
+    service.calls.clear()
+    initial_submissions = runner.submissions
+    warnings: list[str] = []
+    monkeypatch.setattr(window, "_choose_corpus_name", lambda **_: "   ")
+    monkeypatch.setattr(window, "_show_warning", warnings.append)
+    window.rename_corpus()
+    assert warnings == ["資料セット名を入力してください。"]
+    assert service.calls == []
+    assert runner.submissions == initial_submissions
+    window.close()
+
+
+def test_delete_cancel_mentions_index_data_and_source_pdf_and_does_nothing(
+    qt_app: QApplication,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window, service, runner = make_window(qt_app)
+    captured: list[str] = []
+
+    def cancel(*args: Any, **kwargs: Any):  # type: ignore[no-untyped-def]
+        captured.append(args[2])
+        return QMessageBox.StandardButton.No
+
+    monkeypatch.setattr(QMessageBox, "question", cancel)
+    service.calls.clear()
+    initial_submissions = runner.submissions
+
+    window.delete_corpus()
+
+    assert "索引データ" in captured[0]
+    assert "元のPDFファイルは削除されません" in captured[0]
+    assert service.calls == []
+    assert runner.submissions == initial_submissions
+    assert window.selected_index_id() == "uuid-first"
+    window.close()
+
+
+def test_confirmed_delete_uses_uuid_and_selects_remaining_corpus(
+    qt_app: QApplication,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window, service, runner = make_window(qt_app)
+    monkeypatch.setattr(window, "_confirm_corpus_deletion", lambda _: True)
+    service.calls.clear()
+    initial_submissions = runner.submissions
+
+    window.delete_corpus()
+
+    assert ("delete-corpus", "uuid-first") in service.calls
+    assert window.corpus_list.count() == 1
+    assert window.selected_index_id() == "uuid-second"
+    assert window.document_table.rowCount() == 1
+    assert runner.submissions == initial_submissions + 2
+    window.close()
+
+
+def test_deleting_last_corpus_clears_documents_answer_sources_and_actions(
+    qt_app: QApplication,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = StubGuiService()
+    service.corpora = service.corpora[:1]
+    service.inspections = {"uuid-first": service.inspections["uuid-first"]}
+    window, service, _ = make_window(qt_app, service=service)
+    window.answer_output.setPlainText("Old answer")
+    window.sources_output.setPlainText("Old sources")
+    monkeypatch.setattr(window, "_confirm_corpus_deletion", lambda _: True)
+    service.calls.clear()
+
+    window.delete_corpus()
+
+    assert service.calls[0] == ("delete-corpus", "uuid-first")
+    assert window.corpus_list.count() == 0
+    assert window.selected_index_id() is None
+    assert window.document_table.rowCount() == 0
+    assert window.answer_output.toPlainText() == ""
+    assert window.sources_output.toPlainText() == ""
+    assert not window.rename_corpus_button.isEnabled()
+    assert not window.delete_corpus_button.isEnabled()
+    assert not window.ask_button.isEnabled()
+    window.close()
+
+
+def test_delete_failure_restores_ui_and_keeps_corpus_visible(
+    qt_app: QApplication,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window, service, _ = make_window(qt_app)
+    monkeypatch.setattr(window, "_confirm_corpus_deletion", lambda _: True)
+    errors: list[str] = []
+    monkeypatch.setattr(window, "_show_error", errors.append)
+
+    def fail_delete(index_id: str) -> bool:
+        raise RuntimeError(f"delete failed: {index_id}")
+
+    monkeypatch.setattr(service, "delete_corpus", fail_delete)
+    service.calls.clear()
+
+    window.delete_corpus()
+
+    assert errors == ["delete failed: uuid-first"]
+    assert window.corpus_list.count() == 2
+    assert window.selected_index_id() == "uuid-first"
+    assert window.delete_corpus_button.isEnabled()
     window.close()
 
 
@@ -617,13 +887,22 @@ def test_expensive_create_is_submitted_before_service_is_called(
         "_choose_corpus_pdfs",
         lambda: (Path("created.pdf"),),
     )
+    monkeypatch.setattr(
+        window,
+        "_choose_corpus_name",
+        lambda **_: "Created corpus",
+    )
 
     window.create_corpus()
 
     assert service.calls == []
     assert len(runner.tasks) == 1
     runner.succeed_next()
-    assert service.calls[0] == ("create", (Path("created.pdf"),))
+    assert service.calls[0] == (
+        "create",
+        (Path("created.pdf"),),
+        "Created corpus",
+    )
     runner.succeed_next()
     window.close()
 

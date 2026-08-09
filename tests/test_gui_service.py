@@ -30,6 +30,8 @@ def make_document(
 def make_metadata(
     index_id: str = "index-id",
     documents: tuple[StoredDocumentMetadata, ...] | None = None,
+    *,
+    display_name: str | None = None,
 ) -> StoredRagIndexMetadata:
     return StoredRagIndexMetadata(
         index_id=index_id,
@@ -37,6 +39,7 @@ def make_metadata(
         created_at="2026-08-09T00:00:00Z",
         documents=documents if documents is not None else (make_document(),),
         chunk_count=1,
+        display_name=display_name,
     )
 
 
@@ -46,6 +49,8 @@ class StubStore:
         self.list_result = (make_metadata(),)
         self.list_calls = 0
         self.load_calls: list[str] = []
+        self.rename_calls: list[tuple[str, str]] = []
+        self.delete_calls: list[str] = []
         self.loaded_index = RagIndex(
             document_names=("paper.pdf",),
             embedding_model="stored-embedding-model",
@@ -62,6 +67,18 @@ class StubStore:
     def load_index(self, index_id: str) -> RagIndex:
         self.load_calls.append(index_id)
         return self.loaded_index
+
+    def rename_index(
+        self,
+        index_id: str,
+        display_name: str,
+    ) -> StoredRagIndexMetadata:
+        self.rename_calls.append((index_id, display_name))
+        return make_metadata(index_id, display_name=display_name)
+
+    def delete_index(self, index_id: str) -> bool:
+        self.delete_calls.append(index_id)
+        return True
 
 
 class StubManager:
@@ -94,9 +111,12 @@ class StubManager:
         pdf_paths: tuple[Path, ...],
         *,
         embedding_model: str,
+        display_name: str | None = None,
     ) -> StoredRagIndexMetadata:
-        self.calls.append(("create", tuple(pdf_paths), embedding_model))
-        return make_metadata("created-id")
+        self.calls.append(
+            ("create", tuple(pdf_paths), embedding_model, display_name)
+        )
+        return make_metadata("created-id", display_name=display_name)
 
     def add_document(self, index_id: str, pdf_path: Path):  # type: ignore[no-untyped-def]
         self.calls.append(("add", index_id, pdf_path))
@@ -144,14 +164,15 @@ def test_service_inspects_and_creates_through_persistent_manager() -> None:
     paths = (Path("first.pdf"), Path("second.pdf"))
 
     inspections = service.inspect_documents("index-id")
-    created = service.create_corpus(paths)
+    created = service.create_corpus(paths, display_name="研究資料 A")
 
     assert inspections == manager.inspections
     assert created.index_id == "created-id"
     assert manager.calls == [
         ("inspect", "index-id"),
-        ("create", paths, "qwen3-embedding:0.6b"),
+        ("create", paths, "qwen3-embedding:0.6b", "研究資料 A"),
     ]
+    assert created.display_name == "研究資料 A"
 
 
 def test_service_delegates_add_remove_and_reindex_with_durable_ids() -> None:
@@ -168,6 +189,19 @@ def test_service_delegates_add_remove_and_reindex_with_durable_ids() -> None:
         ("remove", "index-id", "document-id"),
         ("reindex", "index-id", "document-id"),
     ]
+
+
+def test_service_delegates_corpus_rename_and_delete_to_store() -> None:
+    store = StubStore()
+    service = make_service(store, StubManager())
+
+    renamed = service.rename_corpus("index-id", "研究資料 B")
+    deleted = service.delete_corpus("index-id")
+
+    assert renamed.display_name == "研究資料 B"
+    assert deleted is True
+    assert store.rename_calls == [("index-id", "研究資料 B")]
+    assert store.delete_calls == ["index-id"]
 
 
 def test_service_loads_selected_index_and_uses_shared_answer_defaults(
@@ -233,3 +267,21 @@ def test_corpus_label_hides_uuid_and_summarizes_document_count() -> None:
     assert format_corpus_label(one) == "first.pdf"
     assert format_corpus_label(many) == "first.pdf + 2件"
     assert "secret-uuid" not in format_corpus_label(one)
+
+
+def test_corpus_label_prefers_display_name_and_unnamed_uses_fallback() -> None:
+    named = make_metadata(
+        "secret-uuid",
+        (make_document("first.pdf"),),
+        display_name="卒業研究 関連論文",
+    )
+    unnamed = make_metadata(
+        "legacy-uuid",
+        (
+            make_document("first.pdf", document_id="one", position=0),
+            make_document("second.pdf", document_id="two", position=1),
+        ),
+    )
+
+    assert format_corpus_label(named) == "卒業研究 関連論文"
+    assert format_corpus_label(unnamed) == "first.pdf + 1件"
