@@ -14,6 +14,7 @@
 - 追加PDFはCLIの`--pdf`を繰り返して指定する
 - PDF、チャンク、embeddingは実行中のメモリ内だけで扱う
 - 同じPDF集合へ複数回質問するときは、immutableなインメモリindexを再利用できる
+- 準備済みindex全体をSQLiteへ保存・一覧・読込・削除できる
 
 ## MVPの対象外
 
@@ -26,8 +27,9 @@
 - クラウドLLM
 - LangChain
 - LlamaIndex
-- PDFインデックスの永続化または再利用
 - フォルダやglobによるPDFの自動収集
+- 既存index内のPDF追加・削除・個別再index
+- PDF更新の自動検出
 
 ## エラーとして扱うもの
 
@@ -52,6 +54,16 @@
 `answer_question_from_index()`は、indexに記録されたembedding modelで質問を1回だけembeddingし、保存済みの全`EmbeddedChunk`を横断検索して回答を生成する。文書側処理は行わないため、同じindexへの2回目以降の質問でもPDF extraction、chunking、文書embeddingは再実行されない。
 
 既存の`answer_question_from_pdf()`と`answer_question_from_pdfs()`は、内部でbuildとanswerを合成する互換APIとして維持する。CLIの構文と出力形式は変更しない。
+
+## SQLite永続化仕様
+
+`SQLiteRagIndexStore`が永続化だけを担当し、`RagIndex`はSQLite connectionや永続IDを保持しない。Python標準の`sqlite3`、`uuid`、`struct`だけを使い、schema version 1を`store_metadata`へ明示する。未対応versionはmigrationを推測せずエラーにする。
+
+indexと各documentにはUUIDを割り当て、documentの入力順、名前、正規化した絶対source pathを保存する。Chunkは全PDF横断の順序、PDF名、1始まりページ番号、page内chunk index、本文を保持する。source PDFが削除または一時的に利用不能でも、保存済みChunkとembeddingから`RagIndex`を復元できる。
+
+embeddingはpickleを使わずlittle-endian IEEE-754 float64 BLOBとして保存し、dimensionも別列へ保存する。load時にdimension、BLOB長、非有限値を検査し、破損したindexを部分的に返さない。
+
+1つのindex保存は単一transactionで行い、途中失敗時は全行をrollbackする。index削除時はforeign key cascadeでdocumentとchunkも削除する。`list_indexes()`はembedding BLOBを読み込まず、軽量metadataだけを返す。既存CLIは自動的にdatabaseを開かず、永続化用の新しいCLI構文も追加しない。
 
 ## 後続Issueで決定する事項
 

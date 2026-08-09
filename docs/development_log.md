@@ -510,3 +510,28 @@ SQLite、ファイル保存、serialization、永続embedding、vector DB、GUI�
 ### 次の段階
 
 永続化／文書管理のIssueで、durable document ID、PDF更新検出、prepared chunk／embeddingの保存形式、追加・削除・再indexの挙動を決定する。
+
+## Issue 020: Persist reusable RAG indexes with SQLite
+
+実施日: 2026-08-09
+
+### 実施内容
+
+- Python標準の`sqlite3`だけを使う専用永続化層`SQLiteRagIndexStore`を追加し、complete indexのinitialize／save／load／list／deleteを実装した
+- `store_metadata`へ`schema_version=1`を保存し、初期化をidempotentにするとともに未対応versionを`RagIndexStoreError`で拒否するようにした
+- 保存indexと各documentへUUIDを割り当て、documentの入力順、名前、正規化した絶対source path、chunkのglobal orderを保存するようにした
+- 検索用embeddingをpickleではなくlittle-endian IEEE-754 float64 BLOBとして保存し、dimension、BLOB長、非有限値をload時に検査するようにした
+- saveを単一SQLite transactionとし、途中失敗時のrollbackを確認した。deleteはforeign key cascadeで関連document／chunkを削除する
+- `list_indexes()`はembedding列をSELECTせず、作成日時、embedding model、文書metadata、chunk数だけを返すようにした
+- source PDFが存在しなくても、新しいstore instanceから`RagIndex`を復元できるようにした。復元時にPDF extractionやOllamaは呼ばない
+- loadしたindexを既存`answer_question_from_index()`へそのまま渡せることを、Ollamaを使わない単体テストで確認した
+- `tmp_path`だけを使うfocused testでschema、UUID、path検証、round trip、float64 encoding、破損検出、軽量list、cascade、rollback、invalid IDを確認した
+- Git管理外の2つの小型text PDFでbuild→SQLite save→新しいstore instance→load→質問のローカルsmoke testを実行し、`loaded == built`、2文書／2Chunkの保持、`borealis.pdf p.1`のglobal rank 1回答を確認した
+
+### 今回追加・変更していないもの
+
+外部DBライブラリ、SQLAlchemy、pickle、FAISS／Chroma、incremental document mutation、自動再index、file hash／mtime監視、GUI、conversation history、production rerankingは追加していない。`RagIndex`、既存RAG service、PDF Reader、Chunker、Embedder、Retriever、生成prompt、CLI syntaxは変更していない。
+
+### 次の段階
+
+document-management lifecycleのIssueで、既存indexへの追加・削除・再index、PDF変更検出、ユーザーがpersistent corpusを選択・管理する方法を設計する。
