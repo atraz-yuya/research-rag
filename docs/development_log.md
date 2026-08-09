@@ -647,3 +647,24 @@ GUI foundationを実機で検証し、必要に応じて資料セット名の編
 ### 互換性と変更していないもの
 
 corpus SQLite schemaはversion 3のまま維持し、既存corpusのindex／document／Chunk／embedding／UUID／`embedding_model`を変更していない。既存CLI syntax、PDF Reader、production Chunker、Embedder、Retriever、RAG serviceのアルゴリズム、生成prompt、worker実装は変更しておらず、新しい外部依存も追加していない。
+
+## Issue 025: Improve GUI operation feedback and empty states
+
+実施日: 2026-08-10
+
+### 実施内容
+
+- MainWindowの通常のQt widget treeへ操作メッセージlabelと`minimum=0`／`maximum=0`のindeterminate `QProgressBar`を追加し、信頼できないpercentageを表示しないようにした
+- 既存`_run_task()`をbusy表示の一貫した境界として維持し、状態確認、corpus作成／rename／削除、文書追加／削除／再index、質問へ操作別のbusy／success messageを追加した
+- failure時はindicatorを隠してcontrolsを復帰し、`処理に失敗しました`を表示するようにした。質問文と既存回答・参照、選択corpus、正常に描画済みの文書tableは成功するまで置き換えない
+- create／deleteなどの成功後に状態確認workerが続く場合は、idle表示を描画せずbusy messageを状態確認へ遷移させ、最終的に元操作の完了messageを表示するようにした
+- corpusなし／未選択時の独立したempty-state labelと、回答／参照欄のplaceholder guidanceを追加した。fakeなlist itemやtable rowは使用していない
+- `DocumentStatus`の内部enumを維持したまま、GUI表示だけを`最新`／`変更あり`／`ファイルなし`／`未確認`へ変換し、各意味のtooltipを追加した
+- document UUIDを従来どおりQt item dataへ保持し、資料名／状態／保存元columnをそれぞれinteractive／content-sized／stretch resizeに設定した。path tooltipも維持した
+- 回答と参照のrank、PDF名、1始まりpage、score、source textのplain-text表示は変更せず、表示領域のminimum heightとplaceholderだけを追加した
+- fake service／queued runnerを使うGUIテストでindeterminate busy state、全status表示、empty state、success／failure、逐次処理、follow-up refresh、failure時のstate保持、既存settings制御を確認した
+- `QT_QPA_PLATFORM=offscreen`とfaulthandlerを使う全suite 410件を成功させ、worker／MainWindow focused suite 48件もfresh processで5回連続成功した
+
+### 互換性と安全性
+
+corpus SQLite schema v3、GUI settings semantics、UUID、DocumentStatus、PDF Reader、Chunker、Embedder、Retriever、RAG prompt、page numbering、citation data、model defaults、CLI syntax／outputは変更していない。既存`QtTaskRunner`、close延期、session-level `QApplication`、DeferredDelete cleanupを維持し、nested `QEventLoop.exec()`、`shiboken6.delete()`、workerからのwidget access、新しい外部依存は追加していない。

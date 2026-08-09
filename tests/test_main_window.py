@@ -15,6 +15,7 @@ import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QApplication,
+    QHeaderView,
     QLabel,
     QMainWindow,
     QMessageBox,
@@ -32,7 +33,11 @@ from research_rag.gui_settings import (
     default_gui_runtime_settings,
     validate_gui_runtime_settings,
 )
-from research_rag.main_window import MainWindow
+from research_rag.main_window import (
+    MainWindow,
+    document_status_tooltip,
+    format_document_status,
+)
 from research_rag.models import Chunk, RagAnswer, SearchResult
 
 
@@ -402,6 +407,11 @@ def test_main_window_constructs_and_startup_lists_corpora_without_loading(
     assert window.corpus_list.item(0).data(Qt.ItemDataRole.UserRole) == "uuid-first"
     assert ("list",) in service.calls
     assert runner.submissions == 1
+    assert window.operation_status_label.text() == "準備完了"
+    assert window.statusBar().currentMessage() == "準備完了"
+    assert window.operation_progress_bar.isHidden()
+    assert window.operation_progress_bar.minimum() == 0
+    assert window.operation_progress_bar.maximum() == 0
     window.close()
 
 
@@ -420,6 +430,47 @@ def test_corpus_list_prefers_display_name_but_keeps_uuid_only_as_item_data(
     assert item.text() == "卒業研究 関連論文"
     assert "uuid-first" not in item.text()
     assert item.data(Qt.ItemDataRole.UserRole) == "uuid-first"
+    window.close()
+
+
+def test_no_corpus_uses_guidance_labels_without_fake_items(
+    qt_app: QApplication,
+) -> None:
+    service = StubGuiService()
+    service.corpora = []
+    service.inspections = {}
+
+    window, _, _ = make_window(qt_app, service=service)
+
+    assert window.corpus_list.count() == 0
+    assert not window.corpus_empty_label.isHidden()
+    assert window.corpus_empty_label.objectName() == "corpusEmptyStateLabel"
+    assert "新しい資料セット" in window.corpus_empty_label.text()
+    assert not window.document_empty_label.isHidden()
+    assert window.document_empty_label.text() == "資料セットを選択してください。"
+    assert window.document_table.isHidden()
+    assert window.new_corpus_button.isEnabled()
+    assert window.settings_button.isEnabled()
+    assert window.answer_output.toPlainText() == ""
+    assert "ここに回答" in window.answer_output.placeholderText()
+    assert window.sources_output.toPlainText() == ""
+    assert "PDF名・ページ・類似度・本文" in (
+        window.sources_output.placeholderText()
+    )
+    window.close()
+
+
+def test_no_selected_corpus_shows_document_guidance(
+    qt_app: QApplication,
+) -> None:
+    window, _, _ = make_window(qt_app)
+
+    window.corpus_list.setCurrentRow(-1)
+
+    assert window.selected_index_id() is None
+    assert not window.document_empty_label.isHidden()
+    assert window.document_table.isHidden()
+    assert window.document_table.rowCount() == 0
     window.close()
 
 
@@ -545,6 +596,7 @@ def test_settings_persistence_failure_rolls_back_live_settings_and_client(
         "apply-settings",
         "restore-settings",
     ]
+    assert window.operation_status_label.text() == "設定の保存に失敗しました"
     window.close()
 
 
@@ -611,12 +663,17 @@ def test_selecting_corpus_uses_uuid_item_data_and_renders_ordered_statuses(
     assert window.document_table.item(0, 0).data(Qt.ItemDataRole.UserRole) == (
         "doc-other"
     )
-    assert window.document_table.item(0, 1).text() == "UNKNOWN"
+    assert window.document_table.item(0, 1).text() == "未確認"
+    assert window.document_table.item(0, 1).data(
+        Qt.ItemDataRole.UserRole
+    ) == DocumentStatus.UNKNOWN
+    assert "fingerprint" in window.document_table.item(0, 1).toolTip()
     assert window.document_table.item(0, 2).text() == "/sources/other.pdf"
+    assert window.document_table.item(0, 2).toolTip() == "/sources/other.pdf"
     window.close()
 
 
-def test_all_document_status_values_are_rendered_as_text(
+def test_all_document_status_values_are_rendered_as_japanese_with_tooltips(
     qt_app: QApplication,
 ) -> None:
     window, _, _ = make_window(qt_app)
@@ -639,7 +696,31 @@ def test_all_document_status_values_are_rendered_as_text(
         window.document_table.item(row, 1).text()
         for row in range(window.document_table.rowCount())
     )
-    assert displayed == tuple(status.value for status in DocumentStatus)
+    assert displayed == ("最新", "変更あり", "ファイルなし", "未確認")
+    for row, status in enumerate(DocumentStatus):
+        item = window.document_table.item(row, 1)
+        assert item.data(Qt.ItemDataRole.UserRole) == status
+        assert item.toolTip() == document_status_tooltip(status)
+        assert format_document_status(status) == item.text()
+    assert tuple(status.value for status in DocumentStatus) == (
+        "CURRENT",
+        "MODIFIED",
+        "MISSING",
+        "UNKNOWN",
+    )
+    window.close()
+
+
+def test_document_table_uses_readable_explicit_column_resize_modes(
+    qt_app: QApplication,
+) -> None:
+    window, _, _ = make_window(qt_app)
+    header = window.document_table.horizontalHeader()
+
+    assert header.sectionResizeMode(0) == QHeaderView.ResizeMode.Interactive
+    assert header.sectionResizeMode(1) == QHeaderView.ResizeMode.ResizeToContents
+    assert header.sectionResizeMode(2) == QHeaderView.ResizeMode.Stretch
+    assert window.document_table.columnWidth(0) >= 200
     window.close()
 
 
@@ -731,6 +812,8 @@ def test_successful_create_refreshes_and_selects_new_corpus(
     assert window.selected_index_id() == "uuid-created"
     assert window.corpus_list.currentItem().text() == "研究資料 A"
     assert ("inspect", "uuid-created") in service.calls
+    assert window.operation_status_label.text() == "資料セットを作成しました"
+    assert window.operation_progress_bar.isHidden()
     window.close()
 
 
@@ -774,6 +857,7 @@ def test_successful_rename_keeps_uuid_selection_and_answer_state(
     assert window.answer_output.toPlainText() == "Keep answer"
     assert window.sources_output.toPlainText() == "Keep sources"
     assert runner.submissions == initial_submissions + 2
+    assert window.operation_status_label.text() == "資料セット名を変更しました"
     window.close()
 
 
@@ -842,6 +926,7 @@ def test_confirmed_delete_uses_uuid_and_selects_remaining_corpus(
     assert window.selected_index_id() == "uuid-second"
     assert window.document_table.rowCount() == 1
     assert runner.submissions == initial_submissions + 2
+    assert window.operation_status_label.text() == "資料セットを削除しました"
     window.close()
 
 
@@ -866,6 +951,13 @@ def test_deleting_last_corpus_clears_documents_answer_sources_and_actions(
     assert window.document_table.rowCount() == 0
     assert window.answer_output.toPlainText() == ""
     assert window.sources_output.toPlainText() == ""
+    assert not window.corpus_empty_label.isHidden()
+    assert not window.document_empty_label.isHidden()
+    assert window.document_table.isHidden()
+    assert "ここに回答" in window.answer_output.placeholderText()
+    assert "PDF名・ページ・類似度・本文" in (
+        window.sources_output.placeholderText()
+    )
     assert not window.rename_corpus_button.isEnabled()
     assert not window.delete_corpus_button.isEnabled()
     assert not window.ask_button.isEnabled()
@@ -893,6 +985,8 @@ def test_delete_failure_restores_ui_and_keeps_corpus_visible(
     assert window.corpus_list.count() == 2
     assert window.selected_index_id() == "uuid-first"
     assert window.delete_corpus_button.isEnabled()
+    assert window.operation_progress_bar.isHidden()
+    assert window.operation_status_label.text() == "処理に失敗しました"
     window.close()
 
 
@@ -917,6 +1011,7 @@ def test_add_cancel_and_success_keep_selected_corpus(
     assert ("add", "uuid-first", Path("added.pdf")) in service.calls
     assert window.selected_index_id() == "uuid-first"
     assert service.calls[-1] == ("inspect", "uuid-first")
+    assert window.operation_status_label.text() == "資料を追加しました"
     window.close()
 
 
@@ -950,10 +1045,12 @@ def test_reindex_and_refresh_use_selected_durable_ids(
     service.calls.clear()
 
     window.reindex_document()
+    assert window.operation_status_label.text() == "資料を再インデックスしました"
     window.refresh_documents()
 
     assert ("reindex", "uuid-first", "doc-first") in service.calls
     assert service.calls[-1] == ("inspect", "uuid-first")
+    assert window.operation_status_label.text() == "資料の状態を更新しました"
     window.close()
 
 
@@ -1002,6 +1099,8 @@ def test_successful_answer_renders_managed_citation_with_one_based_page(
     assert "[1] first.pdf p.1" in sources
     assert "score: 0.876543" in sources
     assert "Grounded source text" in sources
+    assert window.operation_status_label.text() == "回答を生成しました"
+    assert window.operation_progress_bar.isHidden()
     window.close()
 
 
@@ -1015,6 +1114,10 @@ def test_queued_work_disables_actions_and_success_restores_idle_state(
     assert len(runner.tasks) == 1
     assert not window.new_corpus_button.isEnabled()
     assert not window.settings_button.isEnabled()
+    assert not window.operation_progress_bar.isHidden()
+    assert window.operation_progress_bar.minimum() == 0
+    assert window.operation_progress_bar.maximum() == 0
+    assert window.operation_status_label.text() == "資料の状態を確認中..."
 
     runner.succeed_next()
 
@@ -1022,6 +1125,8 @@ def test_queued_work_disables_actions_and_success_restores_idle_state(
     assert window.new_corpus_button.isEnabled()
     assert window.settings_button.isEnabled()
     assert window.statusBar().currentMessage() == "準備完了"
+    assert window.operation_status_label.text() == "準備完了"
+    assert window.operation_progress_bar.isHidden()
 
     window.question_input.setText("Question?")
     service.calls.clear()
@@ -1029,10 +1134,14 @@ def test_queued_work_disables_actions_and_success_restores_idle_state(
     assert service.calls == []
     assert len(runner.tasks) == 1
     assert not window.ask_button.isEnabled()
+    assert not window.operation_progress_bar.isHidden()
+    assert window.operation_status_label.text() == "回答を生成中..."
     runner.succeed_next()
     assert service.calls == [("answer", "uuid-first", "Question?")]
     assert window.ask_button.isEnabled()
     assert window.answer_output.toPlainText() == "Grounded answer"
+    assert window.operation_progress_bar.isHidden()
+    assert window.operation_status_label.text() == "回答を生成しました"
     window.close()
 
 
@@ -1047,14 +1156,137 @@ def test_worker_failure_restores_ui_and_shows_error_without_clearing_question(
     errors: list[str] = []
     monkeypatch.setattr(window, "_show_error", errors.append)
     window.question_input.setText("Keep this question")
+    window.answer_output.setPlainText("Previous answer")
+    window.sources_output.setPlainText("Previous sources")
 
     window.ask_question()
     runner.fail_next(RuntimeError("Ollama unavailable"))
 
     assert errors == ["Ollama unavailable"]
     assert window.question_input.text() == "Keep this question"
+    assert window.answer_output.toPlainText() == "Previous answer"
+    assert window.sources_output.toPlainText() == "Previous sources"
     assert window.ask_button.isEnabled()
-    assert window.statusBar().currentMessage() == "準備完了"
+    assert window.statusBar().currentMessage() == "処理に失敗しました"
+    assert window.operation_status_label.text() == "処理に失敗しました"
+    assert "処理中" not in window.operation_status_label.text()
+    assert window.operation_progress_bar.isHidden()
+    window.close()
+
+
+def test_sequential_worker_failure_then_success_never_leaves_progress_stuck(
+    qt_app: QApplication,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = StubGuiService()
+    runner = QueuedTaskRunner()
+    window, _, runner = make_window(qt_app, service=service, runner=runner)
+    runner.succeed_next()
+    monkeypatch.setattr(window, "_show_error", lambda _: None)
+    window.question_input.setText("Question?")
+
+    window.ask_question()
+    runner.fail_next(RuntimeError("temporary failure"))
+    assert window.operation_progress_bar.isHidden()
+    assert window.operation_status_label.text() == "処理に失敗しました"
+
+    window.ask_question()
+    assert not window.operation_progress_bar.isHidden()
+    assert window.operation_status_label.text() == "回答を生成中..."
+    runner.succeed_next()
+
+    assert window.operation_progress_bar.isHidden()
+    assert window.operation_status_label.text() == "回答を生成しました"
+    assert window.ask_button.isEnabled()
+    window.close()
+
+
+def test_create_followup_refresh_transitions_without_false_idle_state(
+    qt_app: QApplication,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = StubGuiService()
+    runner = QueuedTaskRunner()
+    window, _, runner = make_window(qt_app, service=service, runner=runner)
+    runner.succeed_next()
+    monkeypatch.setattr(
+        window,
+        "_choose_corpus_pdfs",
+        lambda: (Path("created.pdf"),),
+    )
+    monkeypatch.setattr(window, "_choose_corpus_name", lambda **_: "Created")
+
+    window.create_corpus()
+    assert window.operation_status_label.text() == "資料セットを作成中..."
+    assert not window.operation_progress_bar.isHidden()
+
+    runner.succeed_next()
+    assert len(runner.tasks) == 1
+    assert window.operation_status_label.text() == "資料の状態を確認中..."
+    assert not window.operation_progress_bar.isHidden()
+
+    runner.succeed_next()
+    assert window.operation_status_label.text() == "資料セットを作成しました"
+    assert window.operation_progress_bar.isHidden()
+    assert window.selected_index_id() == "uuid-created"
+    window.close()
+
+
+def test_delete_followup_refresh_transitions_and_finishes_with_delete_message(
+    qt_app: QApplication,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = StubGuiService()
+    runner = QueuedTaskRunner()
+    window, _, runner = make_window(qt_app, service=service, runner=runner)
+    runner.succeed_next()
+    monkeypatch.setattr(window, "_confirm_corpus_deletion", lambda _: True)
+
+    window.delete_corpus()
+    assert window.operation_status_label.text() == "資料セットを削除中..."
+    assert not window.operation_progress_bar.isHidden()
+
+    runner.succeed_next()
+    assert len(runner.tasks) == 1
+    assert window.operation_status_label.text() == "資料の状態を確認中..."
+    assert not window.operation_progress_bar.isHidden()
+
+    runner.succeed_next()
+    assert window.operation_status_label.text() == "資料セットを削除しました"
+    assert window.operation_progress_bar.isHidden()
+    assert window.selected_index_id() == "uuid-second"
+    window.close()
+
+
+def test_failed_refresh_keeps_previously_rendered_document_rows(
+    qt_app: QApplication,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = StubGuiService()
+    runner = QueuedTaskRunner()
+    window, _, runner = make_window(qt_app, service=service, runner=runner)
+    runner.succeed_next()
+    before = tuple(
+        tuple(window.document_table.item(row, column).text() for column in range(3))
+        for row in range(window.document_table.rowCount())
+    )
+    errors: list[str] = []
+    monkeypatch.setattr(window, "_show_error", errors.append)
+
+    window.refresh_documents()
+    assert not window.operation_progress_bar.isHidden()
+    assert window.document_table.rowCount() == len(before)
+    runner.fail_next(RuntimeError("refresh failed"))
+
+    after = tuple(
+        tuple(window.document_table.item(row, column).text() for column in range(3))
+        for row in range(window.document_table.rowCount())
+    )
+    assert after == before
+    assert errors == ["refresh failed"]
+    assert window.operation_progress_bar.isHidden()
+    assert window.operation_status_label.text() == "処理に失敗しました"
+    assert window.refresh_button.isEnabled()
     window.close()
 
 

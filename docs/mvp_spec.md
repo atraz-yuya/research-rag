@@ -102,6 +102,12 @@ Embedding model設定は新規corpus作成時だけ使用する。既存corpus�
 
 質問時は保存済みindexをloadし、`answer_question_from_index()`を使用する。回答本文と、各参照元のrank、PDF名、PDFごとに1始まりのページ番号、cosine similarity score、source textを表示する。会話履歴は保持しない。
 
+worker処理中は`minimum=0`／`maximum=0`のindeterminate progress indicatorと操作別の日本語メッセージを表示する。pipelineは信頼できる進捗率を公開していないため、擬似的なpercentageは表示しない。成功時は操作別の完了メッセージへ遷移し、失敗時はindicatorとbusy状態を必ず解除して`処理に失敗しました`と表示する。失敗によって質問入力、既存回答・参照、選択corpus、正常に描画済みの文書tableを不要に消去しない。
+
+corpusがない場合は実itemを追加せず独立したlabelで新規作成を案内し、corpus未選択時もdocument areaに案内を表示する。回答・参照の説明は`placeholderText`とし、実回答データと区別する。最後のcorpus削除後はこれらのempty stateへ戻す。
+
+`DocumentStatus`の`CURRENT`／`MODIFIED`／`MISSING`／`UNKNOWN`は内部値とinspection logicを維持し、GUIだけでそれぞれ`最新`／`変更あり`／`ファイルなし`／`未確認`と表示する。各statusの意味はtooltipで説明し、document UUIDは引き続き資料名itemのQt user dataへ保持する。文書tableは資料名を調整可能な読みやすい幅、状態をcontent幅、保存元pathを残り幅とし、path全体はtooltipでも確認できる。
+
 WidgetはSQL、PDF処理、Chunking、embedding、retrieval、generationを実装せず、GUI service/controller層を介して既存のstore、document manager、RAG serviceを呼び出す。資料セット作成、文書追加、再インデックス、状態確認、質問は`QThreadPool`／`QRunnable`でGUI thread外に実行する。処理中は競合操作を無効化し、成功・失敗のどちらでもUIを復帰させる。失敗時はエラーダイアログを表示し、入力内容と保存済み資料セットを失わない。
 
 ## 後続Issueで決定する事項

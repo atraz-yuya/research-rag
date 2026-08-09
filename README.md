@@ -162,6 +162,10 @@ python -m research_rag.gui_app
 
 GUIでは、保存済み資料セットの一覧、文書の`CURRENT`／`MODIFIED`／`MISSING`／`UNKNOWN`状態、source pathを確認できます。複数PDFから名前付き資料セットを作成し、後から名前を変更できます。PDFの追加、選択文書の再インデックスと削除、状態更新、資料セットへの質問にも対応します。`資料セットを削除`は、その資料セットに属するSQLite内のindex・文書・Chunk・embeddingをまとめて削除しますが、元PDFファイルそのものは削除しません。表示名の重複は許可され、内部のUUIDで資料セットを区別します。
 
+PDF抽出やOllama処理などの実行中は、正確な進捗率を取得できないため、割合を表示しないindeterminate progress indicatorと操作内容を表示します。処理中は競合する操作と設定変更を無効化し、完了後は操作ごとの成功メッセージを表示します。失敗時もindicatorを解除して操作可能な状態へ戻り、質問文、既存の回答・参照、資料セット、正常に表示済みの文書状態を不要に消去しません。
+
+資料セットがない場合と未選択の場合は、次に行う操作をempty-state labelで案内します。回答・参照欄の説明はplaceholderであり、実データとしてコピーされません。文書状態はGUI上で`最新`（保存時と一致）、`変更あり`（元PDFが変更済み）、`ファイルなし`（保存元に存在しない）、`未確認`（比較用fingerprintなし）と表示し、詳細はtooltipで確認できます。内部のstatus値と変更検出ロジックは従来どおりです。
+
 `設定`画面では、Embedding model、Generation model、Top-K（1〜100）、Ollama URLを変更できます。設定は検証後に`settings.ini`へ保存され、GUI再起動後も引き継がれます。Embedding modelの変更は、新しく作成する資料セットだけに適用されます。既存資料セットへの質問、PDF追加、再インデックスは、その資料セットに保存済みのembedding modelを引き続き使用し、選択中の実際のモデル名は資料セット一覧の下に表示されます。Generation modelとTop-Kは次の質問から反映され、Ollama URLを変更すると以後の文書処理と質問が同じ新しい接続先を使います。設定の適用だけではOllamaへ接続しません。
 
 既定のSQLite DBはQtの`QStandardPaths.AppDataLocation`配下に作成されます。macOSでは通常、`~/Library/Application Support/ResearchRAG/indexes.sqlite3`です。GUI設定は同じディレクトリの`settings.ini`へ、corpus SQLiteとは分離して保存します。元PDFの本文はSQLiteへChunkとembeddingとして保存されますが、元PDFファイルをアプリケーションデータ領域へコピーしません。そのため、追加後に元PDFを移動・変更・削除すると、状態はそれぞれ`MISSING`または`MODIFIED`になります。保存済みChunkは引き続き質問に利用でき、再インデックスには元のsource pathにPDFが必要です。
