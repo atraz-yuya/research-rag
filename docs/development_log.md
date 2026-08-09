@@ -561,3 +561,27 @@ document-management lifecycleのIssueで、既存indexへの追加・削除・�
 ### 次の段階
 
 永続corpusと文書状態を一覧し、追加・削除・再indexと`answer_question_from_index()`による質問を操作できる小さなPySide6 GUI foundationを検討する。
+
+## Issue 022: Add PySide6 desktop GUI foundation
+
+実施日: 2026-08-09
+
+### 実施内容
+
+- runtime依存へPySide6を追加し、`python -m research_rag.gui_app`で起動するQt WidgetsデスクトップGUIを追加した
+- CLIとGUIがembedding model=`qwen3-embedding:0.6b`、generation model=`qwen3:4b-instruct`、top_k=`3`を同じ定数から参照するようにし、既存CLIの構文と動作を維持した
+- `RagGuiService`を追加し、`SQLiteRagIndexStore`、`PersistentRagDocumentManager`、`answer_question_from_index()`を再利用して、WidgetからSQLとRAG処理を分離した
+- 保存済み資料セット一覧、文書名・状態・source path、新規資料セット作成、PDF追加、再インデックス、削除、状態更新、質問と参照表示を1つのMainWindowへ実装した
+- 資料セットと文書のUUIDはQt item dataに保持し、利用者向け表示ではPDF名を基にしたラベルを使用した
+- GUIの既定DBを`QStandardPaths.AppDataLocation/indexes.sqlite3`とし、元PDFをコピーせず、資料削除でも元PDFを削除しないことを確認ダイアログとREADMEに明記した
+- `QThreadPool`／`QRunnable`のfinite workerを追加し、作成・追加・削除・再インデックス・状態確認・質問をGUI thread外で実行するようにした。処理中は競合操作を無効化し、失敗時もエラー表示後にUIを復帰させる
+- `QT_QPA_PLATFORM=offscreen`とmock／fakeを使う単体テストを追加し、実ユーザーデータ領域、実PDF、実Ollamaを通常テストで使用しないようにした
+- Git管理外の一時DBと3つの小型text PDF、ローカルOllama、実際のMainWindow／Qt workerで、create→`CURRENT`→source変更→`MODIFIED`→reindex→`CURRENT`→add→remove→question→store／window再生成後の永続状態復元を確認した。削除対象の元PDFは残り、質問では`rank 1 / tides.pdf p.1`の根拠と回答が表示された
+
+### 今回変更・追加していないもの
+
+既存CLI syntax、SQLite schema、PDF Reader、production Chunker、Embedder、Retriever、RAG serviceのアルゴリズム、生成prompt、experimental Chunker／rerankerは変更していない。会話履歴、file watcher、自動再インデックス、vector DB、GUI専用のSQL／RAG再実装、`pytest-qt`などの追加依存も導入していない。
+
+### 次の段階
+
+GUI foundationを実機で検証し、必要に応じて資料セット名の編集、進捗表示、操作性改善を独立したIssueで検討する。
