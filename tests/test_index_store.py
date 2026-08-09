@@ -6,10 +6,15 @@ from uuid import UUID
 import pytest
 
 from research_rag import index_store, rag_service
+from research_rag.document_manager import (
+    DocumentStatus,
+    PersistentRagDocumentManager,
+)
 from research_rag.index_store import (
     SCHEMA_VERSION,
     RagIndexStoreError,
     SQLiteRagIndexStore,
+    SourceFingerprint,
 )
 from research_rag.models import Chunk, EmbeddedChunk, RagIndex
 from research_rag.rag_service import answer_question_from_index
@@ -54,7 +59,7 @@ def table_count(db_path: Path, table_name: str) -> int:
     return row[0]
 
 
-def test_initialize_creates_schema_version_one_and_is_idempotent(
+def test_initialize_creates_schema_version_two_and_is_idempotent(
     tmp_path: Path,
 ) -> None:
     db_path = tmp_path / "nested" / "indexes.sqlite3"
@@ -96,7 +101,7 @@ def test_initialize_rejects_unsupported_schema_version(tmp_path: Path) -> None:
 
     with pytest.raises(
         RagIndexStoreError,
-        match=r"Unsupported.*99.*expected 1",
+        match=r"Unsupported.*99.*expected 2",
     ):
         SQLiteRagIndexStore(db_path).initialize()
 
@@ -138,6 +143,10 @@ def test_save_returns_uuid_metadata_and_persists_all_documents(
     assert len({document.document_id for document in metadata.documents}) == 3
     for document in metadata.documents:
         assert str(UUID(document.document_id)) == document.document_id
+        assert document.content_sha256 is None
+        assert document.file_size is None
+        assert document.mtime_ns is None
+        assert document.indexed_at is None
 
     with sqlite3.connect(store.db_path) as connection:
         rows = connection.execute(
@@ -467,3 +476,229 @@ def test_load_missing_index_fails_clearly(store: SQLiteRagIndexStore) -> None:
 
     with pytest.raises(KeyError, match="does not exist"):
         store.load_index(missing_id)
+
+
+def _create_schema_v1_store(
+    db_path: Path,
+    *,
+    with_data: bool = True,
+    source_path: Path = Path("/old/legacy.pdf"),
+) -> RagIndex:
+    index_id = "00000000-0000-0000-0000-000000000101"
+    document_id = "00000000-0000-0000-0000-000000000102"
+    original = RagIndex(
+        document_names=("legacy.pdf",),
+        embedding_model="legacy-embedding-model",
+        embedded_chunks=(
+            EmbeddedChunk(
+                Chunk("legacy.pdf", 2, 0, "Legacy source text"),
+                (0.25, -0.75),
+            ),
+        ),
+    )
+    with sqlite3.connect(db_path) as connection:
+        connection.executescript(
+            """
+            PRAGMA foreign_keys = ON;
+            CREATE TABLE store_metadata (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+            INSERT INTO store_metadata (key, value)
+            VALUES ('schema_version', '1');
+            CREATE TABLE rag_indexes (
+                index_id TEXT PRIMARY KEY,
+                embedding_model TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE rag_documents (
+                document_id TEXT PRIMARY KEY,
+                index_id TEXT NOT NULL,
+                position INTEGER NOT NULL,
+                document_name TEXT NOT NULL,
+                source_path TEXT NOT NULL,
+                FOREIGN KEY (index_id) REFERENCES rag_indexes(index_id)
+                    ON DELETE CASCADE,
+                UNIQUE (index_id, position),
+                UNIQUE (index_id, document_name)
+            );
+            CREATE TABLE rag_chunks (
+                chunk_id INTEGER PRIMARY KEY,
+                index_id TEXT NOT NULL,
+                document_id TEXT NOT NULL,
+                position INTEGER NOT NULL,
+                page_number INTEGER NOT NULL,
+                chunk_index INTEGER NOT NULL,
+                text TEXT NOT NULL,
+                embedding_dimension INTEGER NOT NULL,
+                embedding BLOB NOT NULL,
+                FOREIGN KEY (index_id) REFERENCES rag_indexes(index_id)
+                    ON DELETE CASCADE,
+                FOREIGN KEY (document_id) REFERENCES rag_documents(document_id)
+                    ON DELETE CASCADE,
+                UNIQUE (index_id, position)
+            );
+            """
+        )
+        if with_data:
+            connection.execute(
+                "INSERT INTO rag_indexes VALUES (?, ?, ?)",
+                (index_id, original.embedding_model, "2026-08-01T00:00:00Z"),
+            )
+            connection.execute(
+                "INSERT INTO rag_documents VALUES (?, ?, ?, ?, ?)",
+                (document_id, index_id, 0, "legacy.pdf", str(source_path)),
+            )
+            connection.execute(
+                """
+                INSERT INTO rag_chunks (
+                    chunk_id, index_id, document_id, position, page_number,
+                    chunk_index, text, embedding_dimension, embedding
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    7,
+                    index_id,
+                    document_id,
+                    0,
+                    2,
+                    0,
+                    "Legacy source text",
+                    2,
+                    struct.pack("<2d", 0.25, -0.75),
+                ),
+            )
+    return original
+
+
+def test_initialize_migrates_v1_transactionally_without_changing_data(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "legacy.sqlite3"
+    original = _create_schema_v1_store(db_path)
+
+    migrated = SQLiteRagIndexStore(db_path)
+    migrated.initialize()
+
+    assert migrated.load_index(
+        "00000000-0000-0000-0000-000000000101"
+    ) == original
+    metadata = migrated.get_index_metadata(
+        "00000000-0000-0000-0000-000000000101"
+    )
+    assert metadata.documents[0].document_id == (
+        "00000000-0000-0000-0000-000000000102"
+    )
+    assert metadata.documents[0].content_sha256 is None
+    assert metadata.documents[0].file_size is None
+    assert metadata.documents[0].mtime_ns is None
+    assert metadata.documents[0].indexed_at is None
+    with sqlite3.connect(db_path) as connection:
+        version = connection.execute(
+            "SELECT value FROM store_metadata WHERE key = 'schema_version'"
+        ).fetchone()
+        chunk_id = connection.execute(
+            "SELECT chunk_id FROM rag_chunks"
+        ).fetchone()
+        foreign_key_errors = connection.execute("PRAGMA foreign_key_check").fetchall()
+    assert version == ("2",)
+    assert chunk_id == (7,)
+    assert foreign_key_errors == []
+
+
+def test_failed_v1_migration_rolls_back_schema_and_version(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "legacy.sqlite3"
+    _create_schema_v1_store(db_path, with_data=False)
+    migrating = SQLiteRagIndexStore(db_path)
+
+    def fail_after_schema_change(connection: sqlite3.Connection) -> None:
+        connection.execute(
+            "ALTER TABLE rag_documents ADD COLUMN content_sha256 TEXT NULL"
+        )
+        raise sqlite3.OperationalError("simulated migration failure")
+
+    monkeypatch.setattr(migrating, "_migrate_v1_to_v2", fail_after_schema_change)
+
+    with pytest.raises(sqlite3.OperationalError, match="simulated"):
+        migrating.initialize()
+
+    with sqlite3.connect(db_path) as connection:
+        version = connection.execute(
+            "SELECT value FROM store_metadata WHERE key = 'schema_version'"
+        ).fetchone()
+        columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(rag_documents)")
+        }
+    assert version == ("1",)
+    assert "content_sha256" not in columns
+
+
+def test_migrated_v1_document_reports_unknown_with_current_file_metadata(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "legacy.sqlite3"
+    source_path = tmp_path / "legacy.pdf"
+    source_path.write_bytes(b"legacy source bytes")
+    _create_schema_v1_store(db_path, source_path=source_path)
+    migrated = SQLiteRagIndexStore(db_path)
+    migrated.initialize()
+
+    status = PersistentRagDocumentManager(
+        migrated,
+        client=object(),  # type: ignore[arg-type]
+    ).inspect_documents("00000000-0000-0000-0000-000000000101")[0]
+
+    assert status.status is DocumentStatus.UNKNOWN
+    assert status.stored_content_sha256 is None
+    assert status.current_content_sha256 is not None
+    assert status.current_file_size == len(b"legacy source bytes")
+
+
+def test_schema_v2_rejects_cross_index_document_chunk_association(
+    store: SQLiteRagIndexStore,
+    tmp_path: Path,
+) -> None:
+    first = store.save_index(make_index(), make_source_paths(tmp_path))
+    second = store.save_index(make_index(), make_source_paths(tmp_path))
+
+    with sqlite3.connect(store.db_path) as connection:
+        connection.execute("PRAGMA foreign_keys = ON")
+        with pytest.raises(sqlite3.IntegrityError, match="FOREIGN KEY"):
+            connection.execute(
+                """
+                UPDATE rag_chunks
+                SET index_id = ?, position = 100
+                WHERE index_id = ? AND position = 0
+                """,
+                (second.index_id, first.index_id),
+            )
+
+
+def test_save_verified_index_persists_fingerprint_metadata(
+    store: SQLiteRagIndexStore,
+    tmp_path: Path,
+) -> None:
+    fingerprints = (
+        SourceFingerprint("a" * 64, 10, 100),
+        SourceFingerprint("b" * 64, 20, 200),
+        SourceFingerprint("c" * 64, 30, 300),
+    )
+
+    saved = store.save_verified_index(
+        make_index(),
+        make_source_paths(tmp_path),
+        fingerprints,
+    )
+    listed = store.get_index_metadata(saved.index_id)
+
+    assert [document.content_sha256 for document in listed.documents] == [
+        "a" * 64,
+        "b" * 64,
+        "c" * 64,
+    ]
+    assert [document.file_size for document in listed.documents] == [10, 20, 30]
+    assert [document.mtime_ns for document in listed.documents] == [100, 200, 300]
+    assert all(document.indexed_at is not None for document in listed.documents)

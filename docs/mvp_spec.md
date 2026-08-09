@@ -15,12 +15,13 @@
 - PDF、チャンク、embeddingは実行中のメモリ内だけで扱う
 - 同じPDF集合へ複数回質問するときは、immutableなインメモリindexを再利用できる
 - 準備済みindex全体をSQLiteへ保存・一覧・読込・削除できる
+- 永続corpusの各文書についてsource fileの状態を確認できる
+- 永続corpusへ文書単位で追加・削除・再indexできる
 
 ## MVPの対象外
 
 - OCR
 - スキャン画像のみのPDF
-- SQLite
 - PySide6 GUI
 - 会話履歴
 - FAISSまたはChromaによる永続化
@@ -28,8 +29,8 @@
 - LangChain
 - LlamaIndex
 - フォルダやglobによるPDFの自動収集
-- 既存index内のPDF追加・削除・個別再index
-- PDF更新の自動検出
+- source fileの自動監視・自動再index
+- 欠落PDFの移動先検索やrename workflow
 
 ## エラーとして扱うもの
 
@@ -57,13 +58,27 @@
 
 ## SQLite永続化仕様
 
-`SQLiteRagIndexStore`が永続化だけを担当し、`RagIndex`はSQLite connectionや永続IDを保持しない。Python標準の`sqlite3`、`uuid`、`struct`だけを使い、schema version 1を`store_metadata`へ明示する。未対応versionはmigrationを推測せずエラーにする。
+`SQLiteRagIndexStore`が永続化だけを担当し、`RagIndex`はSQLite connectionや永続IDを保持しない。Python標準の`sqlite3`、`uuid`、`struct`だけを使い、schema version 2を`store_metadata`へ明示する。schema v1は明示的な1段階migrationでtransactionallyにv2へ移行し、既存データと永続IDを維持する。v1以外の未対応versionはmigrationを推測せずエラーにする。
 
 indexと各documentにはUUIDを割り当て、documentの入力順、名前、正規化した絶対source pathを保存する。Chunkは全PDF横断の順序、PDF名、1始まりページ番号、page内chunk index、本文を保持する。source PDFが削除または一時的に利用不能でも、保存済みChunkとembeddingから`RagIndex`を復元できる。
 
 embeddingはpickleを使わずlittle-endian IEEE-754 float64 BLOBとして保存し、dimensionも別列へ保存する。load時にdimension、BLOB長、非有限値を検査し、破損したindexを部分的に返さない。
 
-1つのindex保存は単一transactionで行い、途中失敗時は全行をrollbackする。index削除時はforeign key cascadeでdocumentとchunkも削除する。`list_indexes()`はembedding BLOBを読み込まず、軽量metadataだけを返す。既存CLIは自動的にdatabaseを開かず、永続化用の新しいCLI構文も追加しない。
+各documentにはnullableな`content_sha256`、`file_size`、`mtime_ns`、`indexed_at`も保存する。schema v1から移行した文書ではこれらをNULLに保ち、保存済みembeddingが現在のsource file由来だと推測しない。schema v2では`index_id`と`document_id`の複合外部キーにより、別indexのdocumentへChunkを関連付けられないようにする。
+
+1つのindex保存と各document mutationはそれぞれ単一transactionで行い、途中失敗時は全行をrollbackする。index削除時はforeign key cascadeでdocumentとchunkも削除する。`list_indexes()`と`get_index_metadata()`はembedding BLOBを読み込まず、軽量metadataだけを返す。既存CLIは自動的にdatabaseを開かず、永続化用の新しいCLI構文も追加しない。
+
+## 永続文書ライフサイクル仕様
+
+`PersistentRagDocumentManager`がfilesystem、PDF processing、Ollamaと永続化層を接続する。`SQLiteRagIndexStore`のSQL methodはPDFを読まず、Ollamaも呼ばない。
+
+`create_index()`は全source fileをSHA-256でfingerprintし、productionの`build_rag_index()`を実行後に再度fingerprintする。前後のSHA-256が一致した場合だけ、indexとfingerprintをatomicに保存する。既存の低水準`save_index()`は互換維持し、任意のprebuilt indexへ信頼できるfingerprintを推測して付与しない。
+
+`inspect_documents()`は文書順を保ち、既存の各source fileを1回だけstreaming hashする。保存SHAと一致すれば`CURRENT`、異なれば`MODIFIED`、保存pathが通常ファイルでなければ`MISSING`、信頼できる保存SHAがなければ`UNKNOWN`とする。変更判定はSHA-256を正とし、sizeとmtimeだけでは`MODIFIED`にしない。inspectionではPDF抽出、chunking、embedding、検索、生成、DB mutationを実行しない。
+
+`add_document()`はduplicate basenameを外部処理前に拒否し、新規PDFだけを保存済みembedding modelで処理して末尾へ追加する。`remove_document()`はsource fileを削除せず、選択文書とそのChunkだけを削除し、残る文書位置とglobal Chunk位置を連続化する。最後の検索可能文書を削除する操作は拒否する。`reindex_document()`は保存source pathの対象文書だけを再処理し、同じdocument IDとpositionを維持してChunkとfingerprintをatomicに置換する。
+
+すべてのmutationでindex IDを維持し、変更しない文書のID・Chunk・embeddingを再生成しない。global Chunk順はdocument position昇順、その文書内のproduction Chunk順とする。add／reindexも処理前後のSHA-256を比較し、source fileの途中変更やPDF／Ollama／DB failure時には以前のcorpusを使用可能なまま保つ。
 
 ## 後続Issueで決定する事項
 
