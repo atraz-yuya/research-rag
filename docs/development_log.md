@@ -585,3 +585,13 @@ document-management lifecycleのIssueで、既存indexへの追加・削除・�
 ### 次の段階
 
 GUI foundationを実機で検証し、必要に応じて資料セット名の編集、進捗表示、操作性改善を独立したIssueで検討する。
+
+### Native teardown crashの追加調査
+
+- macOS／Python 3.11／PySide6 6.11のoffscreen実行で報告された`EXC_BAD_ACCESS`を受け、active worker中のwindow close、worker完了直後のclose、application teardownを追加調査した
+- PR初版の`setAutoDelete(False)`、strong reference、queued relayだけでは、active window close後にworkerが削除済みSignal sourceへemitする経路が残っていた。regression testで`Signal source has been deleted`を再現し、初版だけでは問題が完全には解消していないと判断した
+- `QtTaskRunner`ごとの専用`QThreadPool`、新規受付停止、active task count、idle callback、同期shutdownを追加した。通常のwindow closeはactive task完了まで延期し、`QApplication.aboutToQuit`では`waitForDone()`後にQt objectを破棄する
+- Signalとresult／error stateをGUI thread上のrelayへ移し、`QRunnable`はQtのauto-delete対象とした。queued callbackは削除済みworkerへアクセスせず、relay／stateは`_active_workers`からfinished callback後または同期shutdown後にだけ解放する
+- test helperのnested `QEventLoop`を通常の`processEvents()`待機へ置き換え、重複していた`QApplication` fixtureをsession全体で1つのwrapperを保持する共通fixtureへ統合した。重複fixtureの破棄順序はpytest最終GCでSIGSEGVを再現する要因だった
+- success／failure後のteardown、逐次25 worker、worker／relay解放、active close、close直前完了、application exit中のactive workerをregression testへ追加した
+- 最終focused suite 24件をfaulthandler付きで成功させ、同じsuiteを別プロセスで20回連続実行してnative crashとlifetime errorが再発しないことを確認した

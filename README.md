@@ -162,7 +162,7 @@ GUIでは、保存済み資料セットの一覧、文書の`CURRENT`／`MODIFIE
 
 既定のSQLite DBはQtの`QStandardPaths.AppDataLocation`配下に作成されます。macOSでは通常、`~/Library/Application Support/ResearchRAG/indexes.sqlite3`です。元PDFの本文はSQLiteへChunkとembeddingとして保存されますが、元PDFファイルをアプリケーションデータ領域へコピーしません。そのため、追加後に元PDFを移動・変更・削除すると、状態はそれぞれ`MISSING`または`MODIFIED`になります。保存済みChunkは引き続き質問に利用でき、再インデックスには元のsource pathにPDFが必要です。
 
-資料セット作成、追加、再インデックス、状態確認、質問はQtのworker threadで実行されます。Ollamaへ接続できない場合や処理に失敗した場合はエラーダイアログを表示し、質問入力を保持したまま操作可能な状態へ戻ります。会話履歴は保持せず、質問ごとに独立して回答します。
+資料セット作成、追加、再インデックス、状態確認、質問はQtのworker threadで実行されます。処理中にwindowを閉じた場合は、実行中の有限処理が安全に終了してからwindowを閉じます。Ollamaへ接続できない場合や処理に失敗した場合はエラーダイアログを表示し、質問入力を保持したまま操作可能な状態へ戻ります。会話履歴は保持せず、質問ごとに独立して回答します。
 
 ## CLIの実行
 

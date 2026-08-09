@@ -2,8 +2,10 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+import time
 from collections.abc import Callable
 from pathlib import Path
+from threading import Event
 from typing import Any
 
 import pytest
@@ -15,6 +17,7 @@ from research_rag.index_store import (
     StoredDocumentMetadata,
     StoredRagIndexMetadata,
 )
+from research_rag.gui_worker import QtTaskRunner
 from research_rag.main_window import MainWindow
 from research_rag.models import Chunk, RagAnswer, SearchResult
 
@@ -150,9 +153,32 @@ class StubGuiService:
         return RagAnswer("Grounded answer", (source,))
 
 
+class BlockingInspectionService(StubGuiService):
+    def __init__(self, *, fail: bool = False, delay: float = 0.0) -> None:
+        super().__init__()
+        self.started = Event()
+        self.release = Event()
+        self.returned = Event()
+        self.fail = fail
+        self.delay = delay
+
+    def inspect_documents(self, index_id: str):  # type: ignore[no-untyped-def]
+        self.calls.append(("inspect", index_id))
+        self.started.set()
+        assert self.release.wait(timeout=3)
+        if self.delay:
+            time.sleep(self.delay)
+        self.returned.set()
+        if self.fail:
+            raise RuntimeError("inspection failed")
+        return self.inspections[index_id]
+
+
 class ImmediateTaskRunner:
     def __init__(self) -> None:
         self.submissions = 0
+        self.active_task_count = 0
+        self.shutdown_calls = 0
 
     def submit(
         self,
@@ -163,6 +189,7 @@ class ImmediateTaskRunner:
         on_finished: Callable[[], None],
     ) -> None:
         self.submissions += 1
+        self.active_task_count += 1
         try:
             result = operation()
         except Exception as exc:
@@ -170,7 +197,15 @@ class ImmediateTaskRunner:
         else:
             on_success(result)
         finally:
+            self.active_task_count -= 1
             on_finished()
+
+    def request_shutdown(self, on_idle: Callable[[], None]) -> None:
+        on_idle()
+
+    def shutdown(self, *, wait: bool) -> None:
+        self.shutdown_calls += 1
+        assert not wait or self.active_task_count == 0
 
 
 class QueuedTaskRunner:
@@ -183,6 +218,11 @@ class QueuedTaskRunner:
                 Callable[[], None],
             ]
         ] = []
+        self._idle_callbacks: list[Callable[[], None]] = []
+
+    @property
+    def active_task_count(self) -> int:
+        return len(self.tasks)
 
     def submit(
         self,
@@ -198,19 +238,27 @@ class QueuedTaskRunner:
         operation, on_success, _, on_finished = self.tasks.pop(0)
         on_success(operation())
         on_finished()
+        self._notify_idle()
 
     def fail_next(self, error: Exception) -> None:
         _, _, on_error, on_finished = self.tasks.pop(0)
         on_error(error)
         on_finished()
+        self._notify_idle()
 
+    def request_shutdown(self, on_idle: Callable[[], None]) -> None:
+        self._idle_callbacks.append(on_idle)
+        self._notify_idle()
 
-@pytest.fixture(scope="module")
-def qt_app() -> QApplication:
-    application = QApplication.instance()
-    if application is None:
-        application = QApplication([])
-    return application
+    def shutdown(self, *, wait: bool) -> None:
+        assert not wait or not self.tasks
+
+    def _notify_idle(self) -> None:
+        if self.tasks:
+            return
+        callbacks, self._idle_callbacks = self._idle_callbacks, []
+        for callback in callbacks:
+            callback()
 
 
 def make_window(
@@ -226,6 +274,21 @@ def make_window(
         task_runner=selected_runner,
     )
     return window, selected_service, selected_runner
+
+
+def process_events_until(
+    application: QApplication,
+    predicate: Callable[[], bool],
+    *,
+    timeout: float = 3.0,
+) -> None:
+    deadline = time.monotonic() + timeout
+    while not predicate():
+        application.processEvents()
+        if time.monotonic() >= deadline:
+            raise TimeoutError("Qt window did not reach expected state")
+        time.sleep(0.001)
+    application.processEvents()
 
 
 def test_main_window_constructs_and_startup_lists_corpora_without_loading(
@@ -504,4 +567,93 @@ def test_expensive_create_is_submitted_before_service_is_called(
     assert len(runner.tasks) == 1
     runner.succeed_next()
     assert service.calls[0] == ("create", (Path("created.pdf"),))
+    runner.succeed_next()
+    window.close()
+
+
+def test_active_worker_defers_window_close_until_task_finishes(
+    qt_app: QApplication,
+) -> None:
+    service = BlockingInspectionService()
+    runner = QtTaskRunner()
+    window = MainWindow(
+        service,  # type: ignore[arg-type]
+        task_runner=runner,
+    )
+    window.show()
+    assert service.started.wait(timeout=1)
+
+    close_result = window.close()
+
+    assert close_result is False
+    assert window.isVisible()
+    assert runner.active_task_count == 1
+    service.release.set()
+    process_events_until(qt_app, lambda: not window.isVisible())
+    assert runner.active_task_count == 0
+    assert runner.thread_pool.activeThreadCount() == 0
+
+
+def test_worker_failure_during_deferred_close_does_not_touch_closing_ui(
+    qt_app: QApplication,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = BlockingInspectionService(fail=True)
+    runner = QtTaskRunner()
+    window = MainWindow(
+        service,  # type: ignore[arg-type]
+        task_runner=runner,
+    )
+    errors: list[str] = []
+    monkeypatch.setattr(window, "_show_error", errors.append)
+    window.show()
+    assert service.started.wait(timeout=1)
+
+    assert window.close() is False
+    service.release.set()
+    process_events_until(qt_app, lambda: not window.isVisible())
+
+    assert errors == []
+    assert runner.active_task_count == 0
+
+
+def test_worker_completion_queued_immediately_before_close_is_safe(
+    qt_app: QApplication,
+) -> None:
+    service = BlockingInspectionService()
+    runner = QtTaskRunner()
+    window = MainWindow(
+        service,  # type: ignore[arg-type]
+        task_runner=runner,
+    )
+    window.show()
+    assert service.started.wait(timeout=1)
+    service.release.set()
+    assert service.returned.wait(timeout=1)
+
+    assert window.close() is False
+    process_events_until(qt_app, lambda: not window.isVisible())
+
+    assert runner.active_task_count == 0
+    assert runner.thread_pool.activeThreadCount() == 0
+
+
+def test_application_exit_shutdown_waits_for_active_window_worker(
+    qt_app: QApplication,
+) -> None:
+    service = BlockingInspectionService(delay=0.05)
+    service.release.set()
+    runner = QtTaskRunner()
+    window = MainWindow(
+        service,  # type: ignore[arg-type]
+        task_runner=runner,
+    )
+    assert service.started.wait(timeout=1)
+
+    window.shutdown_for_application_exit()
+    qt_app.processEvents()
+
+    assert service.returned.is_set()
+    assert runner.active_task_count == 0
+    assert runner.thread_pool.activeThreadCount() == 0
     window.close()

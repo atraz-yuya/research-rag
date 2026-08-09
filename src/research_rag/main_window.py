@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QFileDialog,
@@ -48,6 +49,7 @@ class MainWindow(QMainWindow):
             task_runner if task_runner is not None else QtTaskRunner(self)
         )
         self._busy = False
+        self._closing = False
 
         self.setWindowTitle("Research RAG")
         self.resize(1050, 760)
@@ -163,6 +165,8 @@ class MainWindow(QMainWindow):
 
     def refresh_corpora(self, select_index_id: str | None = None) -> None:
         """Reload lightweight metadata and asynchronously inspect selection."""
+        if self._closing:
+            return
         previous_id = select_index_id or self.selected_index_id()
         try:
             corpora = self.service.list_corpora()
@@ -358,7 +362,7 @@ class MainWindow(QMainWindow):
         after_success: Callable[[Any], None] | None = None,
         busy_message: str,
     ) -> None:
-        if self._busy:
+        if self._busy or self._closing:
             return
         completed = False
         task_result: Any = None
@@ -366,6 +370,8 @@ class MainWindow(QMainWindow):
 
         def handle_success(result: Any) -> None:
             nonlocal completed, task_result
+            if self._closing:
+                return
             try:
                 on_success(result)
             except Exception as exc:
@@ -376,9 +382,12 @@ class MainWindow(QMainWindow):
                 task_result = result
 
         def handle_error(error: Exception) -> None:
-            self._show_error(str(error))
+            if not self._closing:
+                self._show_error(str(error))
 
         def handle_finished() -> None:
+            if self._closing:
+                return
             self._set_busy(False, "準備完了")
             if completed and after_success is not None:
                 after_success(task_result)
@@ -418,7 +427,7 @@ class MainWindow(QMainWindow):
         )
 
     def _update_action_states(self) -> None:
-        if self._busy:
+        if self._busy or self._closing:
             return
         for widget in (self.corpus_list, self.document_table, self.question_input):
             widget.setEnabled(True)
@@ -466,3 +475,22 @@ class MainWindow(QMainWindow):
 
     def _show_error(self, message: str) -> None:
         QMessageBox.critical(self, "エラー", message)
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        """Delay window destruction until all finite worker tasks finish."""
+        if self.task_runner.active_task_count:
+            if not self._closing:
+                self._closing = True
+                self._set_busy(True, "実行中の処理が終わるまで待機中...")
+                self.task_runner.request_shutdown(self.close)
+            event.ignore()
+            return
+
+        self._closing = True
+        self.task_runner.shutdown(wait=True)
+        super().closeEvent(event)
+
+    def shutdown_for_application_exit(self) -> None:
+        """Synchronously finish workers before QApplication tears down Qt."""
+        self._closing = True
+        self.task_runner.shutdown(wait=True)

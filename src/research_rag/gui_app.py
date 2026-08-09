@@ -70,6 +70,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
 
     window = MainWindow(service)
+    application.aboutToQuit.connect(window.shutdown_for_application_exit)
     window.show()
     return application.exec()
 
