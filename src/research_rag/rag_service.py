@@ -3,7 +3,7 @@ from pathlib import Path
 
 from .chunker import split_pages_into_chunks
 from .embedder import embed_chunks
-from .models import RagAnswer, SearchResult
+from .models import RagAnswer, RagIndex, SearchResult
 from .ollama_client import OllamaClient
 from .pdf_reader import NoExtractableTextError, extract_page_texts
 from .retriever import retrieve_similar_chunks
@@ -51,7 +51,7 @@ def answer_question_from_pdfs(
     top_k: int = 3,
     client: OllamaClient | None = None,
 ) -> RagAnswer:
-    """Run one shared in-memory RAG pipeline across selected PDFs."""
+    """Build one in-memory index and answer one question from it."""
     clean_question = question.strip()
     if not clean_question:
         raise ValueError("question must not be empty")
@@ -63,6 +63,37 @@ def answer_question_from_pdfs(
         raise ValueError("generation_model must not be empty")
     if top_k <= 0:
         raise ValueError("top_k must be greater than 0")
+
+    ordered_pdf_paths = tuple(pdf_paths)
+    if not ordered_pdf_paths:
+        raise ValueError("at least one PDF must be selected")
+    _validate_unique_document_names(ordered_pdf_paths)
+
+    ollama_client = client if client is not None else OllamaClient()
+    index = build_rag_index(
+        ordered_pdf_paths,
+        embedding_model=clean_embedding_model,
+        client=ollama_client,
+    )
+    return answer_question_from_index(
+        index,
+        clean_question,
+        generation_model=clean_generation_model,
+        top_k=top_k,
+        client=ollama_client,
+    )
+
+
+def build_rag_index(
+    pdf_paths: Sequence[Path],
+    *,
+    embedding_model: str,
+    client: OllamaClient | None = None,
+) -> RagIndex:
+    """Prepare an immutable in-memory index from one or more PDFs."""
+    clean_embedding_model = embedding_model.strip()
+    if not clean_embedding_model:
+        raise ValueError("embedding_model must not be empty")
 
     ordered_pdf_paths = tuple(pdf_paths)
     if not ordered_pdf_paths:
@@ -91,6 +122,37 @@ def answer_question_from_pdfs(
     if not embedded_chunks:
         raise ValueError("no chunk embeddings were generated")
 
+    return RagIndex(
+        document_names=tuple(path.name for path in ordered_pdf_paths),
+        embedding_model=clean_embedding_model,
+        embedded_chunks=tuple(embedded_chunks),
+    )
+
+
+def answer_question_from_index(
+    index: RagIndex,
+    question: str,
+    *,
+    generation_model: str,
+    top_k: int = 3,
+    client: OllamaClient | None = None,
+) -> RagAnswer:
+    """Answer one question using an already prepared in-memory index."""
+    clean_question = question.strip()
+    if not clean_question:
+        raise ValueError("question must not be empty")
+    clean_embedding_model = index.embedding_model.strip()
+    if not clean_embedding_model:
+        raise ValueError("index embedding_model must not be empty")
+    if not index.embedded_chunks:
+        raise ValueError("index must contain at least one embedded chunk")
+    clean_generation_model = generation_model.strip()
+    if not clean_generation_model:
+        raise ValueError("generation_model must not be empty")
+    if top_k <= 0:
+        raise ValueError("top_k must be greater than 0")
+
+    ollama_client = client if client is not None else OllamaClient()
     query_embeddings = ollama_client.embed_texts(
         [clean_question],
         model=clean_embedding_model,
@@ -100,7 +162,7 @@ def answer_question_from_pdfs(
 
     search_results = retrieve_similar_chunks(
         query_embeddings[0],
-        embedded_chunks,
+        index.embedded_chunks,
         top_k=top_k,
     )
     if not search_results:

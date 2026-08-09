@@ -42,6 +42,42 @@ python -m pytest
 
 通常の単体テストはOllamaへ接続しません。
 
+## 再利用可能なインメモリindex
+
+同じPDF集合へ複数回質問する場合は、文書側の処理を`build_rag_index()`で1回だけ実行し、返されたimmutableな`RagIndex`を再利用できます。質問embeddingには、index作成時に記録された埋め込みモデルが自動的に使われます。
+
+```python
+from pathlib import Path
+
+from research_rag.ollama_client import OllamaClient
+from research_rag.rag_service import (
+    answer_question_from_index,
+    build_rag_index,
+)
+
+client = OllamaClient()
+index = build_rag_index(
+    [Path("main-paper.pdf"), Path("supplement.pdf")],
+    embedding_model="qwen3-embedding:0.6b",
+    client=client,
+)
+
+first_answer = answer_question_from_index(
+    index,
+    "主な提案手法は何ですか？",
+    generation_model="qwen3:4b-instruct",
+    client=client,
+)
+second_answer = answer_question_from_index(
+    index,
+    "実験ではどのデータセットを使っていますか？",
+    generation_model="qwen3:4b-instruct",
+    client=client,
+)
+```
+
+この再利用は同じPythonプロセスのメモリ内に限られます。indexの保存・読み込み、PDFの追加・削除、ファイル更新の検出は行いません。既存のCLIと`answer_question_from_pdf()`／`answer_question_from_pdfs()`は従来どおり利用でき、内部で同じbuild＋answerライフサイクルを1回ずつ実行します。
+
 ## CLIの実行
 
 ### 1. 仮想環境を有効化する

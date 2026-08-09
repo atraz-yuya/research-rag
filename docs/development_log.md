@@ -486,3 +486,27 @@ Retrieval tuningは一度区切る。LLM rerankingを統合する場合は別Iss
 ### 次の段階
 
 複数質問で同じ文書集合を再利用する場合のindex lifecycleと、必要性を評価したうえでの永続化／文書管理を検討する。
+
+## Issue 019: Add reusable in-memory RAG index lifecycle
+
+実施日: 2026-08-09
+
+### 実施内容
+
+- 文書名、build時のembedding model、準備済み`EmbeddedChunk`だけを保持するimmutableな`RagIndex`を追加した
+- `build_rag_index()`へPDF extraction、production chunking、文書embeddingを分離し、複数PDFの文書側処理を1回で完了できるようにした
+- `answer_question_from_index()`へ質問embedding、global retrieval、回答生成を分離し、質問embeddingには常にindexに記録されたモデルを使うようにした
+- `RagIndex`にはOllama clientとgeneration modelを保持せず、純粋なインメモリデータとして扱う設計にした
+- 既存の`answer_question_from_pdfs()`をbuild＋answerの合成へ変更し、`answer_question_from_pdf()`とCLIのAPI・構文・出典表示を維持した
+- 同じindexへ2回質問してもPDF extraction、chunking、文書embeddingが再実行されず、質問embedding、retrieval、generationだけが各2回実行されることを単体テストで確認した
+- 複数PDFの入力順、`document_name`、PDFごとに1始まりのページ番号、duplicate basename、no-text PDF、下流エラーの既存動作を維持した
+- 手動構築された空index、空のembedding model、空質問、空generation model、不正な`top_k`を質問処理前に拒否するテストを追加した
+- Git管理外の2つの小型text PDFからindexを1回buildし、同じindexへwind／solarの2質問を実行するローカルOllama smoke testを行った。各回答で`borealis.pdf p.1`／`atlas.pdf p.1`がそれぞれglobal rank 1になり、同じindex objectと複数文書の出典が再利用された
+
+### 今回追加・変更していないもの
+
+SQLite、ファイル保存、serialization、永続embedding、vector DB、GUI、conversation history、rerankingは追加していない。PDF Reader、Chunker、Embedder、Retriever、実験モジュールのアルゴリズム、chunk size、overlap、Top K既定値、生成prompt、CLI syntaxは変更していない。
+
+### 次の段階
+
+永続化／文書管理のIssueで、durable document ID、PDF更新検出、prepared chunk／embeddingの保存形式、追加・削除・再indexの挙動を決定する。

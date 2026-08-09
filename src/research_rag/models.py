@@ -29,6 +29,15 @@ class EmbeddedChunk:
 
 
 @dataclass(frozen=True)
+class RagIndex:
+    """An immutable in-memory corpus prepared for repeated retrieval."""
+
+    document_names: tuple[str, ...]
+    embedding_model: str
+    embedded_chunks: tuple[EmbeddedChunk, ...]
+
+
+@dataclass(frozen=True)
 class SearchResult:
     """A ranked chunk returned by vector similarity search."""
 
