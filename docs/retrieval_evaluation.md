@@ -689,3 +689,83 @@ Case 6の理由説明はBaselineの境界上にあり、p.23 / chunk 2が不均�
 - 4ケースを通じて、英語化はrelevant scoreを概ね上げたが、順位やHit@3を必ず改善しなかった。Case 4ではcross-lingualとscope、Case 5ではqueryの簡潔さ、Case 6では競合Chunk、Case 8ではChunk contaminationがそれぞれ異なる形で作用している。
 
 このIssueではtranslation、query rewriting、reranking、hybrid retrievalをproductionへ導入しない。診断結果は、単一のquery-language施策を直ちに採用する根拠ではなく、次の実験で変更する要因を絞るための観測値として扱う。
+
+## Issue 017: LLM reranking over dense retrieval candidates
+
+### 実験条件
+
+productionの検索挙動を変更せず、Baseline dense retrievalのTop 30を既存のローカル生成LLMで再順位付けした。正式12ケースは`BASELINE_EVALUATION_CASES`に保存された元の質問文をそのまま使用し、翻訳やquery rewriteは行っていない。正式定義上、Case 2だけは元から英語であり、それ以外は元の日本語質問である。
+
+- PDF: `文献レビューと実験的評価.pdf`（ローカルのみ）
+- Baseline chunks: `204`
+- Embedding model: `qwen3-embedding:0.6b`
+- Generation model: `qwen3:4b-instruct`、4.0B、`Q4_K_M`
+- Dense candidate pool: `30`
+- Final evaluation cutoff: Top 3
+- Generation options: `think=false`、`num_ctx=32768`、`num_predict=512`、`temperature=0`
+- モデルが公開するcontext上限: `262144`
+- `ollama ps`で確認した実行時context: `32768`
+
+PDF extraction、Baseline Chunk分割、文書Chunk embeddingは各1回だけ実行した。各質問は1回だけembeddingし、同じquery embeddingをBaseline Top 3、Dense Top 30、dense full rankingで再利用した。各ケースのTop 30全文Chunkは1回の生成リクエストで相互比較し、通常のRAG回答生成は呼び出していない。
+
+LLMには`C001`から始まるdense順位ベースのstable ID、PDF名、ページ番号、chunk index、全文を渡した。出力は`{"ranking": [...]}`というstrict JSONだけを許可する。未知IDとmalformed outputは明示的な実験エラーとし、重複IDは最初の出現だけを採用し、返されなかった候補は元のdense順で末尾へ補完する。
+
+### 正式12ケースの比較結果
+
+| Variant | Hit@1 | Hit@3 | MRR |
+| --- | ---: | ---: | ---: |
+| Baseline Top 3 | `0.4167` (`5/12`) | `0.8333` (`10/12`) | `0.6111` |
+| Dense Top 30 + LLM reranking Top 3 | `0.8333` (`10/12`) | `1.0000` (`12/12`) | `0.9028` |
+
+Candidate-pool relevant-page Recall@30は`1.0000`（`12/12`）だった。すべてのケースで少なくとも1つのrelevant-page ChunkがTop 30へ入り、rerankerが評価可能な候補集合になっていた。
+
+| Case | Dense full first relevant rank | Baseline Top 3 first rank | Reranked first rank | 判定 |
+| ---: | ---: | ---: | ---: | --- |
+| 1 | `1` | `1` | `1` | unchanged |
+| 2 | `1` | `1` | `1` | unchanged |
+| 3 | `1` | `1` | `1` | unchanged |
+| 4 | `24` | `None` | `1` | improved |
+| 5 | `2` | `2` | `1` | improved |
+| 6 | `2` | `2` | `2` | unchanged at page level |
+| 7 | `2` | `2` | `1` | improved |
+| 8 | `7` | `None` | `1` | improved |
+| 9 | `1` | `1` | `1` | unchanged |
+| 10 | `2` | `2` | `3` | regressed, but remains Top 3 |
+| 11 | `3` | `3` | `1` | improved |
+| 12 | `1` | `1` | `1` | unchanged |
+
+改善はCase 4、5、7、8、11の5件、悪化はCase 10の1件だった。Case 10はrank 2から3への低下でHit@3を維持し、既存Baseline成功ケースのTop3 missは発生しなかった。
+
+### Case 4／5／6／8のdirect-answer Chunk
+
+| Case | Chunk | Dense full rank / Top-30 position | Reranked position | Reranked Top 3 |
+| ---: | --- | ---: | ---: | --- |
+| 4 | p.9 / chunk 3 | `24 / 24` | `1` | Yes |
+| 5 | p.9 / chunk 5 | `3 / 3` | `1` | Yes |
+| 6 | p.23 / chunk 3 | `2 / 2` | `4` | No |
+| 6 | p.23 / chunk 2 | `8 / 8` | `2` | Yes |
+| 8 | p.20 / chunk 0 | `7 / 7` | `1` | Yes |
+
+- Case 4では、83 non-review papersのscopeと回答を含むp.9 / chunk 3がrank 24から1へ移動した。p.2 / chunk 4とp.12 / chunk 4はrank 1／2から2／3へ下がり、scopeの異なる関連文より直接回答が優先された。
+- Case 5では、post-2018 network methodsを直接含むp.9 / chunk 5がrank 3から1へ移動した。p.19 / chunk 4は1から2、同じrelevant pageだが直接回答ではないp.9 / chunk 2は2から3へ下がった。
+- Case 6では、従来direct-answerとして追跡していたp.23 / chunk 3がrank 2から4へ下がった一方、AUC-ROCが不均衡データでfalse positivesに鈍感になる具体的理由を含むp.23 / chunk 2がrank 8から2へ上がった。p.29 / chunk 0はrank 1から3、AUC表のp.28 / chunk 0はTop 3外へ下がった。page-level順位は2のままだが、理由を含むChunkを関連表や結論文より優先できた点は重要である。
+- Case 8では、Figure 5由来ノイズを含むものの2つのデータセット名を直接含むp.20 / chunk 0がrank 7から1へ移動した。p.20 / chunk 3もrank 2へ入り、p.29 / chunk 5はrank 1から3、p.12 / chunk 0とp.4 / chunk 1はTop 3外へ下がった。
+
+### Prompt sizeとruntime制約
+
+Top 30全文を含むpromptは、ケースごとに`28,162`〜`32,431`文字だった。文字数はtoken数ではないが、Ollamaは指定どおり`32768` contextをGPU上で確保し、12リクエストすべてを切り詰めやHTTPエラーなしで完了した。
+
+- LLM reranking合計: `556.278`秒
+- 1ケース平均: 約`46.4`秒
+- 1ケース最小／最大: `34.843`秒／`63.225`秒
+- PDF処理とembeddingを含むexperiment全体: `592.720`秒（約9分53秒）
+- `ollama ps`で表示されたgeneration modelのGPU memory: `7.4 GB`
+- 同時にロードされたembedding modelのGPU memory: `2.4 GB`
+
+1質問あたり約35〜63秒のrerankingは、通常の回答生成より前に追加される遅延としては大きい。また、32K contextの4Bモデルとembeddingモデルを同時にロードした実測GPU memoryも約9.8 GBだった。この環境では実験を完走できたが、より小さいメモリの端末や対話的な待ち時間では明確な制約になる。
+
+### 採否判断
+
+品質面では、Hit@3=`12/12`、Case 4のdirect-answer rank 1、Baseline成功ケースのTop3 missなし、Case 6の理由Chunk rank 2を達成し、採用条件1〜4を満たした。一方、1質問平均約46秒の追加処理はローカルデスクトップRAGの既定動作としては重く、実用性に関する条件5を十分満たすとは判断しない。
+
+そのためIssue 017ではproductionへ採用せず、Baseline retrieverを維持する。LLM rerankingは品質改善の有力な実験結果として保持するが、統合する場合は別Issueでopt-in化、latency表示、context／memory要件、失敗時動作を明示して検討する。追加のretrieval tuningはここで一度区切る。

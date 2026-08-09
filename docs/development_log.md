@@ -428,3 +428,37 @@ headingを一律に反復する案から離れ、Case 3の競合Chunk、Case 5�
 ### 次の段階
 
 query-languageだけでは順位改善が一貫しなかったため、scope条件、競合Chunk、Chunk contaminationを分け、Baselineとの比較で1要因ずつ検証する。
+
+## Issue 017: Evaluate LLM reranking over dense retrieval candidates
+
+実施日: 2026-08-09
+
+### 実施内容
+
+- productionのBaseline dense retrieval Top 30を既存ローカル生成LLMで再順位付けする実験用rerankerを追加した
+- stable candidate ID、scope／条件／直接回答を重視するprompt、strict JSON parserを分離した
+- 重複IDは最初の出現だけを採用し、欠落候補はdense順で末尾へ補完し、未知IDとmalformed outputは明示的エラーにした
+- PDF extraction、Baseline Chunk分割、文書embeddingを各1回、各元質問のembeddingとrerankingを各1回にした実験runnerを追加した
+- 同じquery embeddingをBaseline Top 3、Dense Top 30、dense full rankingで再利用し、既存Retrieverだけで候補を生成した
+- `OllamaClient.generate_chat()`へ任意のgeneration optionsを追加したが、未指定時のproduction requestは従来と同じに保った
+- mockだけを使う単体テストで処理回数、ID検証、重複、未知ID、欠落候補、rank再付与、prompt、集計、report、入力検証を確認した
+
+### 実PDF結果
+
+- 使用モデルはembedding=`qwen3-embedding:0.6b`、generation=`qwen3:4b-instruct`
+- Candidate poolはTop 30、final cutoffはTop 3、generationは`num_ctx=32768`、`num_predict=512`、`temperature=0`、`think=false`とした
+- Candidate-pool Recall@30は`12/12`だった
+- BaselineのHit@1／Hit@3／MRR=`0.4167 / 0.8333 / 0.6111`に対し、rerankingは`0.8333 / 1.0000 / 0.9028`だった
+- Case 4、5、7、8、11が改善し、Case 10はrank 2から3へ悪化したがTop 3を維持した
+- Case 4のdirect-answer Chunkはrank 24から1、Case 5は3から1、Case 8は7から1へ移動した
+- Case 6では結論側のp.23 / chunk 3がrank 2から4へ下がった一方、具体的理由を含むchunk 2がrank 8から2へ上がった
+- promptは`28,162`〜`32,431`文字、rerankingは合計`556.278`秒、平均約`46.4`秒、全experimentは`592.720`秒だった
+- 実行時はgeneration modelが32K contextで`7.4 GB`、embedding modelが`2.4 GB`のGPU memoryを使用した
+
+### 採否と変更していないもの
+
+品質条件は満たしたが、1質問約35〜63秒の追加遅延は既定のローカルRAGとして重いため、Issue 017ではproductionへ採用しない。実験コードと結果は再現性のため保持する。本番Retriever、Chunker、Embedder、RAGサービス、CLI、production top_k、query、回答生成promptは変更しておらず、translationやquery rewriteも追加していない。
+
+### 次の段階
+
+Retrieval tuningは一度区切る。LLM rerankingを統合する場合は別Issueでopt-in動作、latency表示、context／memory要件、失敗時のfallbackを明確にする。それ以外は複数PDF、永続化／文書管理、会話履歴、GUIなどのapplication機能へ進む。
