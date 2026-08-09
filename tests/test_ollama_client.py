@@ -242,6 +242,39 @@ def test_generate_chat_posts_messages_and_returns_answer(
     }
 
 
+def test_generate_chat_includes_optional_generation_options(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_urlopen(
+        request: urllib.request.Request,
+        timeout: float,
+    ) -> FakeResponse:
+        captured["payload"] = json.loads(request.data or b"")
+        return FakeResponse(
+            b'{"message": {"role": "assistant", "content": "answer"}}'
+        )
+
+    install_fake_urlopen(monkeypatch, fake_urlopen)
+    messages = [{"role": "user", "content": "Question"}]
+
+    answer = OllamaClient().generate_chat(
+        messages,
+        model="generation-model",
+        options={"num_ctx": 32768, "temperature": 0},
+    )
+
+    assert answer == "answer"
+    assert captured["payload"] == {
+        "model": "generation-model",
+        "messages": messages,
+        "stream": False,
+        "think": False,
+        "options": {"num_ctx": 32768, "temperature": 0},
+    }
+
+
 def test_generate_chat_reports_http_error(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_urlopen(
         request: urllib.request.Request,

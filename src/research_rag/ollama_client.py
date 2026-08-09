@@ -51,6 +51,7 @@ class OllamaClient:
         self,
         messages: list[dict[str, str]],
         model: str,
+        options: dict[str, object] | None = None,
     ) -> str:
         """Generate a non-streaming chat answer using Ollama."""
         if not model.strip():
@@ -66,14 +67,18 @@ class OllamaClient:
             if not isinstance(content, str) or not content.strip():
                 raise ValueError(f"Message at index {index} has empty content")
 
+        payload: dict[str, object] = {
+            "model": model,
+            "messages": messages,
+            "stream": False,
+            "think": False,
+        }
+        if options is not None:
+            payload["options"] = options
+
         response_data = self._post_json(
             "/api/chat",
-            {
-                "model": model,
-                "messages": messages,
-                "stream": False,
-                "think": False,
-            },
+            payload,
             model=model,
         )
         return _parse_chat_answer(response_data)
