@@ -510,6 +510,82 @@ print(format_strict_heading_diagnostics_report(report))
 
 診断コードはこれらの仮説を結論として扱わない。Top 5、正解Chunkの全体順位とscore、relevant pageのChunk本文・長さ・境界を人間が比較し、次の変更対象を証拠から決めるための観測情報だけを提供する。
 
+## Issue 015: Propagate section headings to continuation chunks
+
+### 仮説とCandidate v3
+
+Issue 014では、Candidate v2のlong section内にある継続Chunkがsection headingを失い、Case 5とCase 6の直接回答Chunkのsemantic contextが弱くなる可能性を確認した。Candidate v3ではCandidate v2のstrict heading detection、hard boundary、ページ境界、body window、`chunk_size=1000`、`overlap=150`を維持し、検出済みsectionの継続Chunkだけに同じheadingと改行を付加する。
+
+- sectionの最初のChunkはCandidate v2と同一にする
+- 継続Chunkのbody windowは移動も短縮も行わない
+- body windowがすでに同じheadingから始まる場合は重複させない
+- heading contextはsectionおよびページを跨いで伝播しない
+- Figure／Table本文の除去など、ほかのcleanupは行わない
+- 継続Chunkはheading prefixの文字数分だけ`chunk_size`を超えることを許容する
+
+Candidate v3は実験用の別実装であり、本番ChunkerおよびCandidate v2は変更しない。
+
+### 実PDF 3-way比較
+
+ローカルの`文献レビューと実験的評価.pdf`、正式12ケース、`qwen3-embedding:0.6b`、`top_k=3`で比較した。PDF extractionは1回、Chunk embeddingはvariantごとに1回、question embeddingは1ケースにつき1回とし、同じquery vectorを3 variantへ渡した。
+
+| Variant | total chunks | Hit@1 | Hit@3 | MRR |
+| --- | ---: | ---: | ---: | ---: |
+| Baseline | `204` | `0.4167` | `0.8333` | `0.6111` |
+| Candidate v2 | `218` | `0.4167` | `0.7500` | `0.5417` |
+| Candidate v3 | `218` | `0.4167` | `0.6667` | `0.5139` |
+
+| Delta | Hit@1 | Hit@3 | MRR |
+| --- | ---: | ---: | ---: |
+| Candidate v2 - Baseline | `+0.0000` | `-0.0833` | `-0.0694` |
+| Candidate v3 - Baseline | `+0.0000` | `-0.1667` | `-0.0972` |
+| Candidate v3 - Candidate v2 | `+0.0000` | `-0.0833` | `-0.0278` |
+
+ケース別first relevant rankは次のとおり。`Top3 miss`は正式比較の上位3件にrelevant pageが存在しないことを表す。
+
+| Case | Baseline | Candidate v2 | Candidate v3 |
+| --- | ---: | ---: | ---: |
+| 1 | `1` | `1` | `1` |
+| 2 | `1` | `1` | `1` |
+| 3 | `1` | `3` | `3` |
+| 4 | `Top3 miss` | `Top3 miss` | `Top3 miss` |
+| 5 | `2` | `Top3 miss` | `Top3 miss` |
+| 6 | `2` | `Top3 miss` | `Top3 miss` |
+| 7 | `2` | `2` | `2` |
+| 8 | `Top3 miss` | `1` | `1` |
+| 9 | `1` | `1` | `1` |
+| 10 | `2` | `3` | `3` |
+| 11 | `3` | `3` | `Top3 miss` |
+| 12 | `1` | `1` | `1` |
+
+### 直接回答Chunkの確認
+
+Case 3、5、6、8では、各variantの全Chunk rankingから質問へ直接回答する本文を含むChunkを確認した。
+
+| Case | Variant | page / chunk | full rank | score | 観察 |
+| --- | --- | --- | ---: | ---: | --- |
+| 3 | Baseline | p.3 / chunk 0 | `1` | `0.491621` | 7分類基準を直接含む |
+| 3 | Candidate v2 | p.3 / chunk 0 | `3` | `0.491621` | 本文とscoreはBaselineと同一 |
+| 3 | Candidate v3 | p.3 / chunk 0 | `3` | `0.491621` | 最初のChunkなのでv2から不変 |
+| 5 | Baseline | p.9 / chunk 5 | `3` | `0.501974` | post-2018 methodsを直接含む |
+| 5 | Candidate v2 | p.9 / chunk 6 | `8` | `0.476530` | 継続Chunkに`3.2.1 Methods.`がない |
+| 5 | Candidate v3 | p.9 / chunk 6 | `7` | `0.479945` | heading付加後もTop 3外 |
+| 6 | Baseline | p.23 / chunk 3 | `2` | `0.592461` | AUC-PRが適する理由を直接含む |
+| 6 | Candidate v2 | p.23 / chunk 3 | `9` | `0.528817` | 継続Chunkに`4.4 Performance Metrics`がない |
+| 6 | Candidate v3 | p.23 / chunk 3 | `7` | `0.552513` | heading付加で改善したがTop 3外 |
+| 8 | Baseline | p.20 / chunk 0 | `7` | `0.435093` | Figure 5由来ノイズと同居 |
+| 8 | Candidate v2 | p.20 / chunk 1 | `1` | `0.539355` | `4.2 Data`を独立させた最初のChunk |
+| 8 | Candidate v3 | p.20 / chunk 1 | `1` | `0.539355` | 最初のChunkなのでv2の改善を維持 |
+
+### 結論
+
+- heading propagationはCase 5とCase 6の直接回答Chunkのscoreとfull rankを改善したが、Top 3回復には不十分だった。
+- Case 8のノイズ分離効果は維持され、Candidate v2と同じrank 1になった。
+- Case 3は本文とscoreが不変でrankも3のままであり、heading contextでは競合Chunkの問題を解決できなかった。
+- Candidate v3はCase 11を新たなTop3 missにし、全体のHit@3とMRRもCandidate v2より低下した。
+
+Candidate v3はCandidate v2より全体性能が低いため、本番Chunkerとして採用しない。実験コードは仮説と結果の再現性のため保持する。次の改善ではheadingを一律に反復するのではなく、競合Chunk、queryとの言語差、またはretrieval側の条件識別を別要因として検証する必要がある。
+
 ### 予備観測
 
 - PDF名: `文献レビューと実験的評価.pdf`（ローカルのみ）

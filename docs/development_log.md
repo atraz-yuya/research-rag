@@ -368,3 +368,34 @@ BaselineとCandidate v2についてCase 3、5、6のfull rankingとrelevant page
 ### 次の段階
 
 実PDFでCase 3、5、6、8を診断し、見出し境界による本文移動、overlapの消失、Chunk短縮、競合Chunkのscore変化を比較して、次の改善実験で変更する要因を1つに絞る。
+
+## Issue 015: Propagate section headings to continuation chunks
+
+実施日: 2026-08-08
+
+### 実施内容
+
+- Candidate v2を変更せず、strict heading boundaryを再利用するCandidate v3を別モジュールへ追加した
+- long sectionの継続Chunkだけへsection headingと改行を付加し、最初のChunkとbody windowはCandidate v2と同一にした
+- headingの重複、section間およびページ間の誤伝播を防ぎ、prefix分だけ`chunk_size`を超え得ることを明記した
+- Baseline、Candidate v2、Candidate v3を同じ12ケース、embedding model、`top_k=3`で比較するrunnerを追加した
+- PDF extractionを1回、variantごとのChunk embeddingを各1回、question embeddingを1ケース1回とし、同じquery vectorを3 variantで再利用した
+- 実PDFとOllamaを使わない単体テストでCandidate v3の境界動作、処理回数、query vector共有、集計、report、入力検証を確認した
+
+### 実PDF比較結果
+
+- Chunk数はBaseline=`204`、Candidate v2=`218`、Candidate v3=`218`だった
+- Candidate v3はHit@1=`0.4167`、Hit@3=`0.6667`、MRR=`0.5139`だった
+- Candidate v3 - Candidate v2はHit@1=`+0.0000`、Hit@3=`-0.0833`、MRR=`-0.0278`だった
+- Case 5の直接回答Chunkはrank 8／score `0.476530`からrank 7／`0.479945`へ改善したがTop 3外だった
+- Case 6の直接回答Chunkはrank 9／score `0.528817`からrank 7／`0.552513`へ改善したがTop 3外だった
+- Case 3はrank 3／score `0.491621`のまま、Case 8はrank 1／`0.539355`を維持した
+- Case 11がCandidate v2のrank 3からCandidate v3のTop3 missへ悪化した
+
+### 採否と変更していないもの
+
+Candidate v3はCandidate v2よりHit@3とMRRが低いため、本番Chunkerへ採用しない。Candidate v3は再現性のため実験コードとして保持する。本番Chunker、Candidate v1／v2、Retriever、Embedder、RAGサービス、CLI、chunk_size、overlap、production top_k、embedding model defaultは変更していない。
+
+### 次の段階
+
+headingを一律に反復する案から離れ、Case 3の競合Chunk、Case 5／6のcross-lingualまたはscope条件、Case 11の新規regressionを証拠に基づいて切り分ける。
