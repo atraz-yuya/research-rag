@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QFileDialog,
     QFormLayout,
+    QHeaderView,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -20,6 +21,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPlainTextEdit,
+    QProgressBar,
     QPushButton,
     QSplitter,
     QTableWidget,
@@ -28,7 +30,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .document_manager import DocumentInspection
+from .document_manager import DocumentInspection, DocumentStatus
 from .gui_service import RagGuiService, format_corpus_label
 from .gui_settings import GuiSettingsStore
 from .gui_settings_dialog import GuiSettingsDialog
@@ -39,6 +41,35 @@ from .models import RagAnswer
 
 _CORPUS_DISPLAY_NAME_ROLE = int(Qt.ItemDataRole.UserRole) + 1
 _CORPUS_EMBEDDING_MODEL_ROLE = int(Qt.ItemDataRole.UserRole) + 2
+
+_DOCUMENT_STATUS_PRESENTATION = {
+    DocumentStatus.CURRENT: (
+        "最新",
+        "最新: インデックス作成時と現在のPDF内容が一致しています",
+    ),
+    DocumentStatus.MODIFIED: (
+        "変更あり",
+        "変更あり: 元PDFが変更されています。再インデックスできます",
+    ),
+    DocumentStatus.MISSING: (
+        "ファイルなし",
+        "ファイルなし: 保存元のPDFが見つかりません",
+    ),
+    DocumentStatus.UNKNOWN: (
+        "未確認",
+        "未確認: 比較用fingerprintがないため状態を判断できません",
+    ),
+}
+
+
+def format_document_status(status: DocumentStatus) -> str:
+    """Return the Japanese presentation label without changing status data."""
+    return _DOCUMENT_STATUS_PRESENTATION[status][0]
+
+
+def document_status_tooltip(status: DocumentStatus) -> str:
+    """Explain one persisted document status in user-facing Japanese."""
+    return _DOCUMENT_STATUS_PRESENTATION[status][1]
 
 
 class MainWindow(QMainWindow):
@@ -79,9 +110,10 @@ class MainWindow(QMainWindow):
         top_splitter.setStretchFactor(1, 3)
         root_layout.addWidget(top_splitter, stretch=2)
         root_layout.addWidget(self._build_question_panel(), stretch=3)
+        root_layout.addWidget(self._build_activity_area())
 
         self.setCentralWidget(central)
-        self.statusBar().showMessage("準備完了")
+        self._show_operation_status("準備完了")
 
     def _build_corpus_panel(self) -> QWidget:
         panel = QWidget(self)
@@ -90,6 +122,14 @@ class MainWindow(QMainWindow):
         self.corpus_list = QListWidget(panel)
         self.corpus_list.setObjectName("corpusList")
         layout.addWidget(self.corpus_list)
+        self.corpus_empty_label = QLabel(
+            "資料セットがありません。\n"
+            "「新しい資料セット」からPDFを追加してください。",
+            panel,
+        )
+        self.corpus_empty_label.setObjectName("corpusEmptyStateLabel")
+        self.corpus_empty_label.setWordWrap(True)
+        layout.addWidget(self.corpus_empty_label)
         self.corpus_embedding_model_label = QLabel(
             "使用中のEmbedding model: —",
             panel,
@@ -125,7 +165,11 @@ class MainWindow(QMainWindow):
         self.document_table.setHorizontalHeaderLabels(
             ["資料名", "状態", "保存元"]
         )
-        self.document_table.horizontalHeader().setStretchLastSection(True)
+        header = self.document_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self.document_table.setColumnWidth(0, 220)
         self.document_table.setSelectionBehavior(
             QAbstractItemView.SelectionBehavior.SelectRows
         )
@@ -135,6 +179,13 @@ class MainWindow(QMainWindow):
         self.document_table.setEditTriggers(
             QAbstractItemView.EditTrigger.NoEditTriggers
         )
+        self.document_empty_label = QLabel(
+            "資料セットを選択してください。",
+            panel,
+        )
+        self.document_empty_label.setObjectName("documentEmptyStateLabel")
+        self.document_empty_label.setWordWrap(True)
+        layout.addWidget(self.document_empty_label)
         layout.addWidget(self.document_table)
 
         actions = QHBoxLayout()
@@ -170,13 +221,38 @@ class MainWindow(QMainWindow):
         self.answer_output = QPlainTextEdit(panel)
         self.answer_output.setObjectName("answerOutput")
         self.answer_output.setReadOnly(True)
+        self.answer_output.setPlaceholderText(
+            "資料セットを選択して質問すると、ここに回答が表示されます。"
+        )
+        self.answer_output.setMinimumHeight(120)
         self.sources_output = QPlainTextEdit(panel)
         self.sources_output.setObjectName("sourcesOutput")
         self.sources_output.setReadOnly(True)
+        self.sources_output.setPlaceholderText(
+            "回答に使用したPDF名・ページ・類似度・本文がここに表示されます。"
+        )
+        self.sources_output.setMinimumHeight(160)
         answer_layout.addRow("回答", self.answer_output)
         answer_layout.addRow("参照", self.sources_output)
         layout.addLayout(answer_layout)
         return panel
+
+    def _build_activity_area(self) -> QWidget:
+        area = QWidget(self)
+        area.setObjectName("operationActivityArea")
+        layout = QHBoxLayout(area)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self.operation_status_label = QLabel("準備完了", area)
+        self.operation_status_label.setObjectName("operationStatusLabel")
+        self.operation_progress_bar = QProgressBar(area)
+        self.operation_progress_bar.setObjectName("operationProgressBar")
+        self.operation_progress_bar.setRange(0, 0)
+        self.operation_progress_bar.setTextVisible(False)
+        self.operation_progress_bar.setMaximumWidth(180)
+        self.operation_progress_bar.hide()
+        layout.addWidget(self.operation_status_label, stretch=1)
+        layout.addWidget(self.operation_progress_bar)
+        return area
 
     def _connect_signals(self) -> None:
         self.corpus_list.currentItemChanged.connect(
@@ -194,10 +270,15 @@ class MainWindow(QMainWindow):
         self.add_document_button.clicked.connect(self.add_document)
         self.reindex_button.clicked.connect(self.reindex_document)
         self.remove_button.clicked.connect(self.remove_document)
-        self.refresh_button.clicked.connect(self.refresh_documents)
+        self.refresh_button.clicked.connect(lambda: self.refresh_documents())
         self.ask_button.clicked.connect(self.ask_question)
 
-    def refresh_corpora(self, select_index_id: str | None = None) -> None:
+    def refresh_corpora(
+        self,
+        select_index_id: str | None = None,
+        *,
+        inspection_success_message: str = "準備完了",
+    ) -> None:
         """Reload lightweight metadata and asynchronously inspect selection."""
         if self._closing:
             return
@@ -207,14 +288,18 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             traceback.print_exception(type(exc), exc, exc.__traceback__)
             self._show_error(str(exc))
+            self._show_operation_status("処理に失敗しました")
             self._update_action_states()
             return
 
         self._populate_corpora(corpora, previous_id)
         if self.selected_index_id() is not None:
-            self.refresh_documents()
+            self.refresh_documents(
+                success_message=inspection_success_message,
+            )
         else:
             self._clear_selected_corpus_state()
+            self._show_operation_status(inspection_success_message)
             self._update_action_states()
 
     def _populate_corpora(
@@ -249,6 +334,7 @@ class MainWindow(QMainWindow):
         self.corpus_list.setCurrentRow(selected_row)
         self.corpus_list.blockSignals(False)
         self._update_selected_corpus_info()
+        self._update_empty_states()
 
     def selected_index_id(self) -> str | None:
         item = self.corpus_list.currentItem()
@@ -273,16 +359,22 @@ class MainWindow(QMainWindow):
         self.sources_output.clear()
         self.refresh_documents()
 
-    def refresh_documents(self) -> None:
+    def refresh_documents(
+        self,
+        *,
+        success_message: str = "資料の状態を更新しました",
+    ) -> None:
         index_id = self.selected_index_id()
         if index_id is None:
             self._clear_documents()
+            self._update_empty_states()
             self._update_action_states()
             return
         self._run_task(
             lambda: self.service.inspect_documents(index_id),
             on_success=self._render_documents,
             busy_message="資料の状態を確認中...",
+            success_message=success_message,
         )
 
     def _render_documents(
@@ -298,13 +390,19 @@ class MainWindow(QMainWindow):
                 Qt.ItemDataRole.UserRole,
                 inspection.document_id,
             )
-            status_item = QTableWidgetItem(inspection.status.value)
+            status_item = QTableWidgetItem(
+                format_document_status(inspection.status)
+            )
+            status_item.setData(Qt.ItemDataRole.UserRole, inspection.status)
+            status_item.setToolTip(
+                document_status_tooltip(inspection.status)
+            )
             path_item = QTableWidgetItem(str(inspection.source_path))
             path_item.setToolTip(str(inspection.source_path))
             self.document_table.setItem(row, 0, name_item)
             self.document_table.setItem(row, 1, status_item)
             self.document_table.setItem(row, 2, path_item)
-        self.document_table.resizeColumnsToContents()
+        self._update_empty_states()
         self._update_action_states()
 
     def _clear_documents(self) -> None:
@@ -315,6 +413,7 @@ class MainWindow(QMainWindow):
         self._update_selected_corpus_info()
         self.answer_output.clear()
         self.sources_output.clear()
+        self._update_empty_states()
 
     def create_corpus(self) -> None:
         selected_paths = self._choose_corpus_pdfs()
@@ -337,8 +436,12 @@ class MainWindow(QMainWindow):
                 display_name=clean_display_name,
             ),
             on_success=lambda _: None,
-            after_success=lambda metadata: self.refresh_corpora(metadata.index_id),
+            after_success=lambda metadata: self.refresh_corpora(
+                metadata.index_id,
+                inspection_success_message="資料セットを作成しました",
+            ),
             busy_message="資料セットを作成中...",
+            success_message="資料セットを作成しました",
         )
 
     def rename_corpus(self) -> None:
@@ -363,8 +466,12 @@ class MainWindow(QMainWindow):
         self._run_task(
             lambda: self.service.rename_corpus(index_id, clean_display_name),
             on_success=lambda _: None,
-            after_success=lambda _: self.refresh_corpora(index_id),
+            after_success=lambda _: self.refresh_corpora(
+                index_id,
+                inspection_success_message="資料セット名を変更しました",
+            ),
             busy_message="資料セット名を変更中...",
+            success_message="資料セット名を変更しました",
         )
 
     def delete_corpus(self) -> None:
@@ -380,11 +487,14 @@ class MainWindow(QMainWindow):
             on_success=lambda _: None,
             after_success=lambda _: self._after_corpus_deleted(),
             busy_message="資料セットを削除中...",
+            success_message="資料セットを削除しました",
         )
 
     def _after_corpus_deleted(self) -> None:
         self._clear_selected_corpus_state()
-        self.refresh_corpora()
+        self.refresh_corpora(
+            inspection_success_message="資料セットを削除しました"
+        )
 
     def open_settings(self) -> None:
         """Open a non-blocking modal editor while no task is active."""
@@ -426,9 +536,10 @@ class MainWindow(QMainWindow):
                 raise
         except Exception as exc:
             traceback.print_exception(type(exc), exc, exc.__traceback__)
+            self._show_operation_status("設定の保存に失敗しました")
             self._show_error(str(exc))
             return
-        self.statusBar().showMessage("設定を保存しました")
+        self._show_operation_status("設定を保存しました")
 
     def _release_settings_dialog(self, _result: int = 0) -> None:
         self._settings_dialog = None
@@ -455,8 +566,12 @@ class MainWindow(QMainWindow):
         self._run_task(
             lambda: self.service.add_document(index_id, pdf_path),
             on_success=lambda _: None,
-            after_success=lambda _: self.refresh_corpora(index_id),
+            after_success=lambda _: self.refresh_corpora(
+                index_id,
+                inspection_success_message="資料を追加しました",
+            ),
             busy_message="資料を追加中...",
+            success_message="資料を追加しました",
         )
 
     def remove_document(self) -> None:
@@ -474,8 +589,12 @@ class MainWindow(QMainWindow):
         self._run_task(
             lambda: self.service.remove_document(index_id, document_id),
             on_success=lambda _: None,
-            after_success=lambda _: self.refresh_corpora(index_id),
+            after_success=lambda _: self.refresh_corpora(
+                index_id,
+                inspection_success_message="資料を削除しました",
+            ),
             busy_message="資料を削除中...",
+            success_message="資料を削除しました",
         )
 
     def reindex_document(self) -> None:
@@ -487,8 +606,12 @@ class MainWindow(QMainWindow):
         self._run_task(
             lambda: self.service.reindex_document(index_id, document_id),
             on_success=lambda _: None,
-            after_success=lambda _: self.refresh_corpora(index_id),
+            after_success=lambda _: self.refresh_corpora(
+                index_id,
+                inspection_success_message="資料を再インデックスしました",
+            ),
             busy_message="再インデックス中...",
+            success_message="資料を再インデックスしました",
         )
 
     def ask_question(self) -> None:
@@ -504,6 +627,7 @@ class MainWindow(QMainWindow):
             lambda: self.service.answer(index_id, question),
             on_success=self._render_answer,
             busy_message="回答を生成中...",
+            success_message="回答を生成しました",
         )
 
     def _render_answer(self, answer: RagAnswer) -> None:
@@ -529,20 +653,23 @@ class MainWindow(QMainWindow):
         on_success: Callable[[Any], None],
         after_success: Callable[[Any], None] | None = None,
         busy_message: str,
+        success_message: str,
     ) -> None:
         if self._busy or self._closing:
             return
         completed = False
+        failed = False
         task_result: Any = None
         self._set_busy(True, busy_message)
 
         def handle_success(result: Any) -> None:
-            nonlocal completed, task_result
+            nonlocal completed, failed, task_result
             if self._closing:
                 return
             try:
                 on_success(result)
             except Exception as exc:
+                failed = True
                 traceback.print_exception(type(exc), exc, exc.__traceback__)
                 self._show_error(str(exc))
             else:
@@ -550,15 +677,25 @@ class MainWindow(QMainWindow):
                 task_result = result
 
         def handle_error(error: Exception) -> None:
+            nonlocal failed
+            failed = True
             if not self._closing:
                 self._show_error(str(error))
 
         def handle_finished() -> None:
             if self._closing:
                 return
-            self._set_busy(False, "準備完了")
+            self._set_busy(
+                False,
+                "処理に失敗しました" if failed else success_message,
+            )
             if completed and after_success is not None:
-                after_success(task_result)
+                try:
+                    after_success(task_result)
+                except Exception as exc:
+                    traceback.print_exception(type(exc), exc, exc.__traceback__)
+                    self._show_operation_status("処理に失敗しました")
+                    self._show_error(str(exc))
 
         try:
             self.task_runner.submit(
@@ -569,17 +706,29 @@ class MainWindow(QMainWindow):
             )
         except Exception as exc:
             traceback.print_exception(type(exc), exc, exc.__traceback__)
-            self._set_busy(False, "準備完了")
+            self._set_busy(False, "処理に失敗しました")
             self._show_error(str(exc))
 
     def _set_busy(self, busy: bool, message: str) -> None:
         self._busy = busy
-        self.statusBar().showMessage(message)
+        self._show_operation_status(message)
+        self.operation_progress_bar.setVisible(busy)
         if busy:
             for widget in self._interactive_widgets():
                 widget.setEnabled(False)
         else:
             self._update_action_states()
+
+    def _show_operation_status(self, message: str) -> None:
+        self.operation_status_label.setText(message)
+        self.statusBar().showMessage(message)
+
+    def _update_empty_states(self) -> None:
+        has_corpus = self.corpus_list.count() > 0
+        has_selection = self.selected_index_id() is not None
+        self.corpus_empty_label.setVisible(not has_corpus)
+        self.document_empty_label.setVisible(not has_selection)
+        self.document_table.setVisible(has_selection)
 
     def _interactive_widgets(self) -> tuple[QWidget, ...]:
         return (
