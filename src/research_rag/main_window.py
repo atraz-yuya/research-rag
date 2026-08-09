@@ -51,6 +51,7 @@ class MainWindow(QMainWindow):
         self._busy = False
         self._closing = False
 
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         self.setWindowTitle("Research RAG")
         self.resize(1050, 760)
         self._build_ui()

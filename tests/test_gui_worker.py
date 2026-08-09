@@ -18,6 +18,10 @@ from PySide6.QtWidgets import QApplication
 from research_rag.gui_worker import QtTaskRunner
 
 
+def test_suite_uses_one_qapplication_instance(qt_app: QApplication) -> None:
+    assert QApplication.instance() is qt_app
+
+
 @pytest.fixture
 def runner(qt_app: QApplication):  # type: ignore[no-untyped-def]
     task_runner = QtTaskRunner()

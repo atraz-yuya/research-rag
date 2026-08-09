@@ -2,7 +2,9 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+import gc
 import time
+import weakref
 from collections.abc import Callable
 from pathlib import Path
 from threading import Event
@@ -10,7 +12,13 @@ from typing import Any
 
 import pytest
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import (
+    QApplication,
+    QLabel,
+    QMainWindow,
+    QMessageBox,
+    QWidget,
+)
 
 from research_rag.document_manager import DocumentInspection, DocumentStatus
 from research_rag.index_store import (
@@ -297,12 +305,61 @@ def test_main_window_constructs_and_startup_lists_corpora_without_loading(
     window, service, runner = make_window(qt_app)
 
     assert window.windowTitle() == "Research RAG"
+    assert window.testAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
     assert window.corpus_list.count() == 2
     assert window.corpus_list.item(0).text() == "first.pdf + 1件"
     assert window.corpus_list.item(0).data(Qt.ItemDataRole.UserRole) == "uuid-first"
     assert ("list",) in service.calls
     assert runner.submissions == 1
     window.close()
+
+
+def test_plain_widget_tree_is_deterministically_deleted_without_rag(
+    qt_app: QApplication,
+    delete_qt_widget: Callable[[Any], None],
+) -> None:
+    for iteration in range(100):
+        window = QMainWindow()
+        central = QWidget(window)
+        label = QLabel(f"label-{iteration}", central)
+        window.setCentralWidget(central)
+        window_destroyed = Event()
+        label_destroyed = Event()
+        window.destroyed.connect(lambda *_: window_destroyed.set())
+        label.destroyed.connect(lambda *_: label_destroyed.set())
+
+        delete_qt_widget(window)
+
+        assert window_destroyed.is_set()
+        assert label_destroyed.is_set()
+        del label
+        del central
+        del window
+        if iteration % 10 == 0:
+            gc.collect()
+
+
+def test_many_main_windows_are_deterministically_deleted(
+    qt_app: QApplication,
+    delete_qt_widget: Callable[[Any], None],
+) -> None:
+    for _ in range(50):
+        window, service, runner = make_window(qt_app)
+        destroyed = Event()
+        window.destroyed.connect(lambda *_: destroyed.set())
+        window_reference = weakref.ref(window)
+        child_reference = weakref.ref(window.question_input)
+
+        delete_qt_widget(window)
+
+        assert destroyed.is_set()
+        assert runner.active_task_count == 0
+        del runner
+        del service
+        del window
+        gc.collect()
+        assert window_reference() is None
+        assert child_reference() is None
 
 
 def test_selecting_corpus_uses_uuid_item_data_and_renders_ordered_statuses(
@@ -581,6 +638,8 @@ def test_active_worker_defers_window_close_until_task_finishes(
         task_runner=runner,
     )
     window.show()
+    destroyed = Event()
+    window.destroyed.connect(lambda *_: destroyed.set())
     assert service.started.wait(timeout=1)
 
     close_result = window.close()
@@ -589,7 +648,7 @@ def test_active_worker_defers_window_close_until_task_finishes(
     assert window.isVisible()
     assert runner.active_task_count == 1
     service.release.set()
-    process_events_until(qt_app, lambda: not window.isVisible())
+    process_events_until(qt_app, destroyed.is_set)
     assert runner.active_task_count == 0
     assert runner.thread_pool.activeThreadCount() == 0
 
@@ -605,13 +664,15 @@ def test_worker_failure_during_deferred_close_does_not_touch_closing_ui(
         task_runner=runner,
     )
     errors: list[str] = []
+    destroyed = Event()
+    window.destroyed.connect(lambda *_: destroyed.set())
     monkeypatch.setattr(window, "_show_error", errors.append)
     window.show()
     assert service.started.wait(timeout=1)
 
     assert window.close() is False
     service.release.set()
-    process_events_until(qt_app, lambda: not window.isVisible())
+    process_events_until(qt_app, destroyed.is_set)
 
     assert errors == []
     assert runner.active_task_count == 0
@@ -627,12 +688,14 @@ def test_worker_completion_queued_immediately_before_close_is_safe(
         task_runner=runner,
     )
     window.show()
+    destroyed = Event()
+    window.destroyed.connect(lambda *_: destroyed.set())
     assert service.started.wait(timeout=1)
     service.release.set()
     assert service.returned.wait(timeout=1)
 
     assert window.close() is False
-    process_events_until(qt_app, lambda: not window.isVisible())
+    process_events_until(qt_app, destroyed.is_set)
 
     assert runner.active_task_count == 0
     assert runner.thread_pool.activeThreadCount() == 0

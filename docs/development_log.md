@@ -595,3 +595,13 @@ GUI foundationを実機で検証し、必要に応じて資料セット名の編
 - test helperのnested `QEventLoop`を通常の`processEvents()`待機へ置き換え、重複していた`QApplication` fixtureをsession全体で1つのwrapperを保持する共通fixtureへ統合した。重複fixtureの破棄順序はpytest最終GCでSIGSEGVを再現する要因だった
 - success／failure後のteardown、逐次25 worker、worker／relay解放、active close、close直前完了、application exit中のactive workerをregression testへ追加した
 - 最終focused suite 24件をfaulthandler付きで成功させ、同じsuiteを別プロセスで20回連続実行してnative crashとlifetime errorが再発しないことを確認した
+
+### QWidget teardown crashの追加調査
+
+- active QRunnableを伴わない`QWidget::~QWidget`／`QLabel::~QLabel`／Shiboken wrapper／Python cyclic GC経路の`EXC_BAD_ACCESS`を別問題として調査した
+- RAG処理を含まない`QApplication`＋`QMainWindow`＋`QWidget`＋`QLabel`の最小構成では、close-onlyを30プロセス×5,000 window、`close()`＋`deleteLater()`＋DeferredDelete処理を10プロセス×5,000 window実行してもcrashを再現しなかった。PySide6 6.11.1 offscreenの単純widget treeだけで必発する問題ではなかった
+- PRの既存testは`window.close()`で非表示にするだけでC++ QObject treeの削除をPython GCへ残していた。Qt parent-child treeとchild signalからbound methodへのPython referenceが共存するため、test終了時のwrapper破棄順序を決定的にする必要があると判断した
+- productionの`MainWindow`へ`WA_DeleteOnClose`を設定し、active worker完了後に受理されるclose eventでQt側がwindow treeを削除するようにした
+- test session全体で1つの`QApplication` strong referenceを維持したまま、各test後にGUI threadでtop-level widgetをcloseし、必要なwidgetへ`deleteLater()`を発行し、`sendPostedEvents(..., DeferredDelete)`でC++ treeを削除してからPython GCを行う共通fixtureを追加した。`shiboken6.delete()`は使用していない
+- RAGなしwidget tree 100回、実MainWindow 50回、worker success／failure／active close／完了直後closeをdeterministicに削除するregressionを追加し、MainWindowとchild wrapperのweak referenceがGC後に残らないことも確認した
+- faulthandler付きfocused suite 27件を成功させ、同じsuiteをfresh processで30回連続実行してQWidget／QLabel teardown crashが再発しないことを確認した
