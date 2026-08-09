@@ -76,7 +76,34 @@ second_answer = answer_question_from_index(
 )
 ```
 
-この再利用は同じPythonプロセスのメモリ内に限られます。indexの保存・読み込み、PDFの追加・削除、ファイル更新の検出は行いません。既存のCLIと`answer_question_from_pdf()`／`answer_question_from_pdfs()`は従来どおり利用でき、内部で同じbuild＋answerライフサイクルを1回ずつ実行します。
+`RagIndex`自身による再利用は同じPythonプロセスのメモリ内に限られます。永続化には次節の専用storeを使います。PDFの追加・削除やファイル更新の検出は行いません。既存のCLIと`answer_question_from_pdf()`／`answer_question_from_pdfs()`は従来どおり利用でき、内部で同じbuild＋answerライフサイクルを1回ずつ実行します。
+
+## SQLiteへのindex保存
+
+`SQLiteRagIndexStore`を使うと、準備済みindexをPython標準ライブラリのSQLiteへ保存し、別プロセスで読み直せます。データベースはリポジトリ外のユーザーデータ領域へ置いてください。
+
+```python
+from pathlib import Path
+
+from research_rag.index_store import SQLiteRagIndexStore
+
+pdf_paths = [Path("main-paper.pdf"), Path("supplement.pdf")]
+db_path = Path.home() / ".research-rag" / "indexes.sqlite3"
+
+store = SQLiteRagIndexStore(db_path)
+store.initialize()
+metadata = store.save_index(index, pdf_paths)
+
+# 別プロセス相当の新しいstore instanceから読み込む
+reopened_store = SQLiteRagIndexStore(db_path)
+reopened_store.initialize()
+loaded_index = reopened_store.load_index(metadata.index_id)
+
+saved_indexes = reopened_store.list_indexes()
+deleted = reopened_store.delete_index(metadata.index_id)
+```
+
+保存形式はschema version 1です。文書・indexには永続UUIDを付け、embeddingはpickleを使わずlittle-endian IEEE-754 float64 BLOBとして保存します。元PDFの絶対source pathも管理情報として保持しますが、loadや質問時にPDFが存在する必要はありません。現在のCLIは永続化を自動的に使用せず、構文も従来どおりです。
 
 ## CLIの実行
 
