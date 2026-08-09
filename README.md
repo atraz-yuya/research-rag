@@ -6,7 +6,7 @@
 
 ## 現在の開発段階
 
-テキストを含む1つ以上のPDFへ質問できるCLI版MVPを実装済みです。選択したPDFを1つの共有検索空間として扱い、ページ境界を保って全文書を横断検索します。Ollamaが生成した回答と、根拠となるPDF名・ページ番号・類似度・文章を表示します。SQLiteへ保存したcorpusでは、文書の変更検出と文書単位の追加・削除・再indexも利用できます。
+テキストを含む1つ以上のPDFへ質問できるCLI版MVPと、保存済み資料セットを管理して質問できるPySide6デスクトップGUIを実装済みです。選択したPDFを1つの共有検索空間として扱い、ページ境界を保って全文書を横断検索します。Ollamaが生成した回答と、根拠となるPDF名・ページ番号・類似度・文章を表示します。SQLiteへ保存した資料セットでは、文書の変更検出と文書単位の追加・削除・再インデックスも利用できます。
 
 MVPの範囲と完了条件は [`docs/mvp_spec.md`](docs/mvp_spec.md) を参照してください。
 
@@ -41,6 +41,16 @@ python -m pytest
 ```
 
 通常の単体テストはOllamaへ接続しません。
+
+GUIテストだけをheadless環境で実行する場合は、Qtのoffscreen platformを指定します。`pytest-qt`は使用していません。
+
+```bash
+QT_QPA_PLATFORM=offscreen python -m pytest \
+    tests/test_gui_service.py \
+    tests/test_gui_worker.py \
+    tests/test_gui_app.py \
+    tests/test_main_window.py -v
+```
 
 ## 再利用可能なインメモリindex
 
@@ -138,6 +148,22 @@ removed = manager.remove_document(metadata.index_id, added.document_id)
 
 追加と再indexでは、対象PDFだけをproduction pipelineで処理し、保存済みembedding modelを使用します。削除では対象文書だけを削除します。いずれも既存の`index_id`と変更しない文書の`document_id`を維持し、既存文書を再embeddingしません。source fileが処理中に変わった場合や外部処理・DB処理が失敗した場合は、保存済みcorpusを変更しません。最後の検索可能文書の削除は拒否されるため、corpus全体を消す場合は`delete_index()`を使用します。
 
+## デスクトップGUIの実行
+
+GUIはPySide6を使用し、CLIとは別のエントリーポイントで起動します。先にOllamaを起動し、CLIと同じ埋め込みモデルと生成モデルを準備してください。
+
+```bash
+ollama pull qwen3-embedding:0.6b
+ollama pull qwen3:4b-instruct
+python -m research_rag.gui_app
+```
+
+GUIでは、保存済み資料セットの一覧、文書の`CURRENT`／`MODIFIED`／`MISSING`／`UNKNOWN`状態、source pathを確認できます。複数PDFからの資料セット作成、PDFの追加、選択文書の再インデックスと削除、状態更新、資料セットへの質問に対応します。削除はSQLite内の索引対象だけに作用し、元PDFファイルそのものは削除しません。
+
+既定のSQLite DBはQtの`QStandardPaths.AppDataLocation`配下に作成されます。macOSでは通常、`~/Library/Application Support/ResearchRAG/indexes.sqlite3`です。元PDFの本文はSQLiteへChunkとembeddingとして保存されますが、元PDFファイルをアプリケーションデータ領域へコピーしません。そのため、追加後に元PDFを移動・変更・削除すると、状態はそれぞれ`MISSING`または`MODIFIED`になります。保存済みChunkは引き続き質問に利用でき、再インデックスには元のsource pathにPDFが必要です。
+
+資料セット作成、追加、再インデックス、状態確認、質問はQtのworker threadで実行されます。処理中にwindowを閉じた場合は、実行中の有限処理が安全に終了してからwindowを閉じます。Ollamaへ接続できない場合や処理に失敗した場合はエラーダイアログを表示し、質問入力を保持したまま操作可能な状態へ戻ります。会話履歴は保持せず、質問ごとに独立して回答します。
+
 ## CLIの実行
 
 ### 1. 仮想環境を有効化する
@@ -202,4 +228,4 @@ CLIは回答本文に続けて、検索順位、PDF名、PDF内で1始まりの�
 
 ## MVPの対象外
 
-OCR、GUI、会話履歴、FAISS／ChromaなどのベクトルDB、クラウドLLMには対応していません。フォルダやglobによるPDFの自動収集、ファイル監視、自動再indexも行いません。
+OCR、会話履歴、FAISS／ChromaなどのベクトルDB、クラウドLLMには対応していません。フォルダやglobによるPDFの自動収集、ファイル監視、自動再インデックスも行いません。

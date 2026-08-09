@@ -1,4 +1,4 @@
-# CLI版MVP仕様
+# Research RAG MVP仕様
 
 ## MVPの対象
 
@@ -17,12 +17,13 @@
 - 準備済みindex全体をSQLiteへ保存・一覧・読込・削除できる
 - 永続corpusの各文書についてsource fileの状態を確認できる
 - 永続corpusへ文書単位で追加・削除・再indexできる
+- PySide6デスクトップGUIで保存済み資料セットを管理し、質問できる
+- GUIで資料セット内の文書名、source path、`CURRENT`／`MODIFIED`／`MISSING`／`UNKNOWN`状態を確認できる
 
 ## MVPの対象外
 
 - OCR
 - スキャン画像のみのPDF
-- PySide6 GUI
 - 会話履歴
 - FAISSまたはChromaによる永続化
 - クラウドLLM
@@ -79,6 +80,20 @@ embeddingはpickleを使わずlittle-endian IEEE-754 float64 BLOBとして保存
 `add_document()`はduplicate basenameを外部処理前に拒否し、新規PDFだけを保存済みembedding modelで処理して末尾へ追加する。`remove_document()`はsource fileを削除せず、選択文書とそのChunkだけを削除し、残る文書位置とglobal Chunk位置を連続化する。最後の検索可能文書を削除する操作は拒否する。`reindex_document()`は保存source pathの対象文書だけを再処理し、同じdocument IDとpositionを維持してChunkとfingerprintをatomicに置換する。
 
 すべてのmutationでindex IDを維持し、変更しない文書のID・Chunk・embeddingを再生成しない。global Chunk順はdocument position昇順、その文書内のproduction Chunk順とする。add／reindexも処理前後のSHA-256を比較し、source fileの途中変更やPDF／Ollama／DB failure時には以前のcorpusを使用可能なまま保つ。
+
+## デスクトップGUI仕様
+
+GUIは`python -m research_rag.gui_app`で起動する。既存CLIの構文・既定値・動作は維持し、GUIとCLIは同じproduction RAG機能を使用する。GUIの既定値はembedding model=`qwen3-embedding:0.6b`、generation model=`qwen3:4b-instruct`、top_k=`3`とし、CLIと共通の定数から参照する。
+
+GUIの既定DBは`QStandardPaths.AppDataLocation`配下の`indexes.sqlite3`とする。テストではDB pathを注入し、実ユーザーデータ領域へ書き込まない。元PDFはアプリケーションデータ領域へコピーせず、資料の削除でも元PDFを削除しない。
+
+起動時は`SQLiteRagIndexStore.list_indexes()`の軽量metadataから保存済み資料セットを表示し、UUIDは内部item dataとして保持する。資料セット選択時は`PersistentRagDocumentManager.inspect_documents()`を使い、文書順を保って文書名、状態、source pathを表示する。
+
+新規資料セットは1つ以上のPDFから作成でき、選択中の資料セットにはPDFを1件ずつ追加できる。選択文書は保存済みsource pathから再インデックスでき、削除前には確認ダイアログで元PDFが削除されないことを明示する。状態更新はfilesystem fingerprintだけを確認し、PDF extractionやOllamaを実行しない。
+
+質問時は保存済みindexをloadし、`answer_question_from_index()`を使用する。回答本文と、各参照元のrank、PDF名、PDFごとに1始まりのページ番号、cosine similarity score、source textを表示する。会話履歴は保持しない。
+
+WidgetはSQL、PDF処理、Chunking、embedding、retrieval、generationを実装せず、GUI service/controller層を介して既存のstore、document manager、RAG serviceを呼び出す。資料セット作成、文書追加、再インデックス、状態確認、質問は`QThreadPool`／`QRunnable`でGUI thread外に実行する。処理中は競合操作を無効化し、成功・失敗のどちらでもUIを復帰させる。失敗時はエラーダイアログを表示し、入力内容と保存済み資料セットを失わない。
 
 ## 後続Issueで決定する事項
 

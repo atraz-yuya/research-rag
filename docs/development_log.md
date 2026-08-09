@@ -561,3 +561,47 @@ document-management lifecycleのIssueで、既存indexへの追加・削除・�
 ### 次の段階
 
 永続corpusと文書状態を一覧し、追加・削除・再indexと`answer_question_from_index()`による質問を操作できる小さなPySide6 GUI foundationを検討する。
+
+## Issue 022: Add PySide6 desktop GUI foundation
+
+実施日: 2026-08-09
+
+### 実施内容
+
+- runtime依存へPySide6を追加し、`python -m research_rag.gui_app`で起動するQt WidgetsデスクトップGUIを追加した
+- CLIとGUIがembedding model=`qwen3-embedding:0.6b`、generation model=`qwen3:4b-instruct`、top_k=`3`を同じ定数から参照するようにし、既存CLIの構文と動作を維持した
+- `RagGuiService`を追加し、`SQLiteRagIndexStore`、`PersistentRagDocumentManager`、`answer_question_from_index()`を再利用して、WidgetからSQLとRAG処理を分離した
+- 保存済み資料セット一覧、文書名・状態・source path、新規資料セット作成、PDF追加、再インデックス、削除、状態更新、質問と参照表示を1つのMainWindowへ実装した
+- 資料セットと文書のUUIDはQt item dataに保持し、利用者向け表示ではPDF名を基にしたラベルを使用した
+- GUIの既定DBを`QStandardPaths.AppDataLocation/indexes.sqlite3`とし、元PDFをコピーせず、資料削除でも元PDFを削除しないことを確認ダイアログとREADMEに明記した
+- `QThreadPool`／`QRunnable`のfinite workerを追加し、作成・追加・削除・再インデックス・状態確認・質問をGUI thread外で実行するようにした。処理中は競合操作を無効化し、失敗時もエラー表示後にUIを復帰させる
+- `QT_QPA_PLATFORM=offscreen`とmock／fakeを使う単体テストを追加し、実ユーザーデータ領域、実PDF、実Ollamaを通常テストで使用しないようにした
+- Git管理外の一時DBと3つの小型text PDF、ローカルOllama、実際のMainWindow／Qt workerで、create→`CURRENT`→source変更→`MODIFIED`→reindex→`CURRENT`→add→remove→question→store／window再生成後の永続状態復元を確認した。削除対象の元PDFは残り、質問では`rank 1 / tides.pdf p.1`の根拠と回答が表示された
+
+### 今回変更・追加していないもの
+
+既存CLI syntax、SQLite schema、PDF Reader、production Chunker、Embedder、Retriever、RAG serviceのアルゴリズム、生成prompt、experimental Chunker／rerankerは変更していない。会話履歴、file watcher、自動再インデックス、vector DB、GUI専用のSQL／RAG再実装、`pytest-qt`などの追加依存も導入していない。
+
+### 次の段階
+
+GUI foundationを実機で検証し、必要に応じて資料セット名の編集、進捗表示、操作性改善を独立したIssueで検討する。
+
+### Native teardown crashの追加調査
+
+- macOS／Python 3.11／PySide6 6.11のoffscreen実行で報告された`EXC_BAD_ACCESS`を受け、active worker中のwindow close、worker完了直後のclose、application teardownを追加調査した
+- PR初版の`setAutoDelete(False)`、strong reference、queued relayだけでは、active window close後にworkerが削除済みSignal sourceへemitする経路が残っていた。regression testで`Signal source has been deleted`を再現し、初版だけでは問題が完全には解消していないと判断した
+- `QtTaskRunner`ごとの専用`QThreadPool`、新規受付停止、active task count、idle callback、同期shutdownを追加した。通常のwindow closeはactive task完了まで延期し、`QApplication.aboutToQuit`では`waitForDone()`後にQt objectを破棄する
+- Signalとresult／error stateをGUI thread上のrelayへ移し、`QRunnable`はQtのauto-delete対象とした。queued callbackは削除済みworkerへアクセスせず、relay／stateは`_active_workers`からfinished callback後または同期shutdown後にだけ解放する
+- test helperのnested `QEventLoop`を通常の`processEvents()`待機へ置き換え、重複していた`QApplication` fixtureをsession全体で1つのwrapperを保持する共通fixtureへ統合した。重複fixtureの破棄順序はpytest最終GCでSIGSEGVを再現する要因だった
+- success／failure後のteardown、逐次25 worker、worker／relay解放、active close、close直前完了、application exit中のactive workerをregression testへ追加した
+- 最終focused suite 24件をfaulthandler付きで成功させ、同じsuiteを別プロセスで20回連続実行してnative crashとlifetime errorが再発しないことを確認した
+
+### QWidget teardown crashの追加調査
+
+- active QRunnableを伴わない`QWidget::~QWidget`／`QLabel::~QLabel`／Shiboken wrapper／Python cyclic GC経路の`EXC_BAD_ACCESS`を別問題として調査した
+- RAG処理を含まない`QApplication`＋`QMainWindow`＋`QWidget`＋`QLabel`の最小構成では、close-onlyを30プロセス×5,000 window、`close()`＋`deleteLater()`＋DeferredDelete処理を10プロセス×5,000 window実行してもcrashを再現しなかった。PySide6 6.11.1 offscreenの単純widget treeだけで必発する問題ではなかった
+- PRの既存testは`window.close()`で非表示にするだけでC++ QObject treeの削除をPython GCへ残していた。Qt parent-child treeとchild signalからbound methodへのPython referenceが共存するため、test終了時のwrapper破棄順序を決定的にする必要があると判断した
+- productionの`MainWindow`へ`WA_DeleteOnClose`を設定し、active worker完了後に受理されるclose eventでQt側がwindow treeを削除するようにした
+- test session全体で1つの`QApplication` strong referenceを維持したまま、各test後にGUI threadでtop-level widgetをcloseし、必要なwidgetへ`deleteLater()`を発行し、`sendPostedEvents(..., DeferredDelete)`でC++ treeを削除してからPython GCを行う共通fixtureを追加した。`shiboken6.delete()`は使用していない
+- RAGなしwidget tree 100回、実MainWindow 50回、worker success／failure／active close／完了直後closeをdeterministicに削除するregressionを追加し、MainWindowとchild wrapperのweak referenceがGC後に残らないことも確認した
+- faulthandler付きfocused suite 27件を成功させ、同じsuiteをfresh processで30回連続実行してQWidget／QLabel teardown crashが再発しないことを確認した

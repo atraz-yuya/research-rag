@@ -3,14 +3,14 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
+from .defaults import (
+    DEFAULT_EMBEDDING_MODEL,
+    DEFAULT_GENERATION_MODEL,
+    DEFAULT_TOP_K,
+)
 from .models import RagAnswer
 from .ollama_client import DEFAULT_OLLAMA_BASE_URL, OllamaClient, OllamaError
 from .rag_service import answer_question_from_pdfs
-
-
-DEFAULT_EMBEDDING_MODEL = "qwen3-embedding:0.6b"
-DEFAULT_GENERATION_MODEL = "qwen3:4b-instruct"
-DEFAULT_TOP_K = 3
 
 
 def build_parser() -> argparse.ArgumentParser:
