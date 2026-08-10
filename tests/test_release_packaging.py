@@ -3,8 +3,11 @@ from __future__ import annotations
 import configparser
 import os
 import plistlib
+import runpy
 import shlex
 import subprocess
+import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -17,6 +20,9 @@ PYPROJECT = REPOSITORY_ROOT / "pyproject.toml"
 DEPLOY_SPEC = REPOSITORY_ROOT / "pysidedeploy.spec"
 LOCAL_HELPER = REPOSITORY_ROOT / "scripts" / "build_macos_app.sh"
 RELEASE_HELPER = REPOSITORY_ROOT / "scripts" / "release_macos_app.sh"
+NUITKA_METADATA_PLUGIN = (
+    REPOSITORY_ROOT / "scripts" / "nuitka_bundle_metadata_plugin.py"
+)
 TEST_IDENTITY = "Developer ID Application: Test Developer (TESTTEAM1)"
 
 
@@ -32,6 +38,7 @@ def _prepared_arguments(
         pyproject_path=PYPROJECT,
         signing_identity=signing_identity,
         exec_directory="build/release" if signing_identity else None,
+        bundle_metadata_plugin=NUITKA_METADATA_PLUGIN,
     )
     config = configparser.ConfigParser()
     assert config.read(destination) == [str(destination)]
@@ -63,8 +70,9 @@ def _install_fake_release_commands(
     with fake_info.open("wb") as plist_file:
         plistlib.dump(
             {
-                "CFBundleIdentifier": "placeholder",
-                "CFBundleShortVersionString": "1.0",
+                "CFBundleIdentifier": "io.github.atraz-yuya.research-rag",
+                "CFBundleShortVersionString": "0.1.0",
+                "CFBundleVersion": "0.1.0",
             },
             plist_file,
         )
@@ -147,6 +155,7 @@ def test_project_version_is_the_single_source_for_bundle_metadata(
     assert (
         "--macos-signed-app-name=io.github.atraz-yuya.research-rag" in arguments
     )
+    assert f"--user-plugin={NUITKA_METADATA_PLUGIN}" in arguments
 
 
 def test_changed_pyproject_version_propagates_without_python_version_constant(
@@ -159,6 +168,7 @@ def test_changed_pyproject_version_propagates_without_python_version_constant(
         DEPLOY_SPEC,
         destination,
         pyproject_path=pyproject,
+        bundle_metadata_plugin=NUITKA_METADATA_PLUGIN,
     )
     config = configparser.ConfigParser()
     config.read(destination)
@@ -166,14 +176,6 @@ def test_changed_pyproject_version_propagates_without_python_version_constant(
         config["nuitka"]["extra_args"]
     )
 
-    info_plist = tmp_path / "Info.plist"
-    with info_plist.open("wb") as plist_file:
-        plistlib.dump({}, plist_file)
-    release_metadata.update_bundle_info(info_plist, pyproject_path=pyproject)
-    with info_plist.open("rb") as plist_file:
-        values = plistlib.load(plist_file)
-    assert values["CFBundleShortVersionString"] == "7.8.9"
-    assert values["CFBundleVersion"] == "7.8.9"
     assert '"0.1.0"' not in (
         REPOSITORY_ROOT / "scripts" / "release_metadata.py"
     ).read_text()
@@ -192,21 +194,61 @@ def test_release_spec_uses_native_developer_id_and_hardened_runtime(
     assert "--macos-sign-notarization" in arguments
 
 
-def test_bundle_metadata_is_updated_and_verified_before_signing(
+def test_nuitka_plugin_adds_bundle_version_before_original_plist_writer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    written: list[tuple[str, dict[str, object]]] = []
+    macos_app = types.ModuleType("nuitka.freezer.MacOSApp")
+    macos_app._writePlist = lambda filename, values: written.append(
+        (filename, values)
+    )
+    freezer = types.ModuleType("nuitka.freezer")
+    freezer.MacOSApp = macos_app
+    plugin_base = types.ModuleType("nuitka.plugins.PluginBase")
+    plugin_base.NuitkaPluginBase = type("NuitkaPluginBase", (), {})
+    nuitka = types.ModuleType("nuitka")
+    plugins = types.ModuleType("nuitka.plugins")
+    monkeypatch.setitem(sys.modules, "nuitka", nuitka)
+    monkeypatch.setitem(sys.modules, "nuitka.freezer", freezer)
+    monkeypatch.setitem(sys.modules, "nuitka.freezer.MacOSApp", macos_app)
+    monkeypatch.setitem(sys.modules, "nuitka.plugins", plugins)
+    monkeypatch.setitem(sys.modules, "nuitka.plugins.PluginBase", plugin_base)
+    monkeypatch.setenv("RESEARCH_RAG_BUNDLE_VERSION", "7.8.9")
+
+    runpy.run_path(os.fspath(NUITKA_METADATA_PLUGIN))
+    macos_app._writePlist(
+        os.fspath(tmp_path / "Info.plist"),
+        {"CFBundleShortVersionString": "7.8.9"},
+    )
+
+    assert written == [
+        (
+            os.fspath(tmp_path / "Info.plist"),
+            {
+                "CFBundleShortVersionString": "7.8.9",
+                "CFBundleVersion": "7.8.9",
+            },
+        )
+    ]
+
+
+def test_bundle_metadata_verifier_rejects_unsigned_build_metadata_mismatch(
     tmp_path: Path,
 ) -> None:
     info_plist = tmp_path / "Info.plist"
     with info_plist.open("wb") as plist_file:
-        plistlib.dump({"CFBundleIdentifier": "old"}, plist_file)
+        plistlib.dump(
+            {
+                "CFBundleIdentifier": "wrong",
+                "CFBundleShortVersionString": "0.1.0",
+                "CFBundleVersion": "0.1.0",
+            },
+            plist_file,
+        )
 
-    release_metadata.update_bundle_info(info_plist, pyproject_path=PYPROJECT)
-    release_metadata.verify_bundle_info(info_plist, pyproject_path=PYPROJECT)
-
-    with info_plist.open("rb") as plist_file:
-        values = plistlib.load(plist_file)
-    assert values["CFBundleIdentifier"] == "io.github.atraz-yuya.research-rag"
-    assert values["CFBundleShortVersionString"] == "0.1.0"
-    assert values["CFBundleVersion"] == "0.1.0"
+    with pytest.raises(release_metadata.MetadataError, match="CFBundleIdentifier"):
+        release_metadata.verify_bundle_info(info_plist, pyproject_path=PYPROJECT)
 
 
 def test_local_build_dry_run_injects_metadata_without_credentials(
@@ -248,6 +290,7 @@ def test_local_build_dry_run_injects_metadata_without_credentials(
     config.read(copied_spec)
     arguments = shlex.split(config["nuitka"]["extra_args"])
     assert "--macos-app-version=0.1.0" in arguments
+    assert f"--user-plugin={NUITKA_METADATA_PLUGIN}" in arguments
     assert not any(argument.startswith("--macos-sign-identity") for argument in arguments)
 
 
@@ -348,7 +391,7 @@ def test_release_workflow_uses_zip_notarytool_stapling_and_actual_architecture(
     assert "Research RAG.app --keychain-profile" not in calls[submit_index]
     assert "--wait --output-format json" in calls[submit_index]
     assert any("stapler validate" in call for call in calls)
-    assert any("--options runtime --timestamp" in call for call in calls)
+    assert not any(" --sign " in call for call in calls if call.startswith("codesign "))
 
 
 def test_notarization_rejection_reports_submission_id_and_fetches_log(
@@ -384,5 +427,9 @@ def test_release_helper_has_no_legacy_or_plaintext_credential_fallbacks() -> Non
     assert "get-task-allow=true" not in source
     assert "--keychain-profile" in source
     assert "--sign -" not in source
-    assert "--options runtime --timestamp" in source
+    assert "codesign --force --deep" not in source
+    assert "codesign --deep --force" not in source
+    assert "--force --deep" not in source
+    assert "--deep --force" not in source
+    assert '--sign "$IDENTITY"' not in source
     assert "--wait --output-format json" in source

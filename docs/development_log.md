@@ -704,10 +704,11 @@ corpus SQLite schema v3、GUI settings semantics、UUID、DocumentStatus、PDF R
 ### 実施内容
 
 - macOS bundle identifierを`io.github.atraz-yuya.research-rag`へ固定し、`pyproject.toml`の`[project].version`だけをversion sourceとして`CFBundleShortVersionString`と`CFBundleVersion`へ反映するpackaging helperを追加した。production Python packageへversion定数は追加していない
-- Nuitka 4.1.3の`--macos-app-version`が`CFBundleShortVersionString`だけを生成するため、bundle生成後かつ最終署名前にInfo.plistのidentifierと両version fieldを正規化し、直後に署名・検証するようにした
-- 既存`scripts/build_macos_app.sh`をcredential-freeなローカル開発用として維持し、metadata正規化後に従来のad-hoc署名とstrict検証を行うようにした
+- Nuitka 4.1.3の`--macos-app-version`が`CFBundleShortVersionString`だけを生成するため、専用Nuitka user pluginを追加した。pluginはNuitka自身がInfo.plistを書き出す時点で、同じproject versionを`CFBundleVersion`へ追加する
+- 既存`scripts/build_macos_app.sh`をcredential-freeなローカル開発用として維持し、identifierと両version fieldをbundle署名前に完成させてから従来のad-hoc署名とstrict検証を行うようにした
 - 独立した`scripts/release_macos_app.sh`を追加した。Developer ID Application identityとnotarytool Keychain profileを外部環境変数で必須化し、ad-hoc署名へfallbackしない
-- release buildではNuitka native signing optionと、metadata正規化後の明示的なDeveloper ID最終署名を使用する。hardened runtime、secure timestamp、signing authority、`get-task-allow`不在を検証する
+- release buildではNuitka native signing optionだけを使用し、Developer ID署名後にInfo.plistを変更・再署名しない。Nuitka署名済みbundleのhardened runtime、secure timestamp、signing authority、`get-task-allow`不在を検証してからnotarizationへ進む
+- review指摘を受け、release helperから`codesign --force --deep`によるproduction再署名を削除した。`codesign --verify --deep --strict`はverificationとして維持し、release signingに`--deep`／`--force`を使わないregression testを追加した
 - `.app`を`ditto`で事前ZIP化し、`xcrun notarytool submit --wait`へ送信する。Accepted後にstapler staple／validate、codesign、可能な場合はGatekeeper assessmentを行い、実際のarchitectureとproject versionを名前に含む最終ZIPを生成する
 - notarization failure時はresult JSON、submission ID、notarytool logを確認できるようにした。`--dry-run`はbuild、署名、Keychain変更、Appleへのnetwork requestを行わない
 - certificate、秘密鍵、password、Team ID、notary credentialをrepositoryへ保存せず、notarytoolにはKeychain profile名だけを渡す。`altool`は使用しない
@@ -716,10 +717,11 @@ corpus SQLite schema v3、GUI settings semantics、UUID、DocumentStatus、PDF R
 ### 実機確認
 
 - macOS 26.5.2 arm64、Python 3.11.15、PySide6 6.11.1、Nuitka 4.1.3でlocal build dry-runとrelease `--dry-run`を成功させた。release dry-runにはversion `0.1.0`、bundle identifier、arm64想定ZIP、全stageが表示され、build、署名、Keychain変更、Appleへの通信は行われなかった
-- 同環境でcredential-freeなlocal standalone buildを実行し、171 MBのarm64 `Research RAG.app`を生成した。Info.plistは`CFBundleIdentifier=io.github.atraz-yuya.research-rag`、`CFBundleShortVersionString=0.1.0`、`CFBundleVersion=0.1.0`となり、bundle内にDB、settings、PDFを含まないことを確認した
+- PR初版でcredential-freeなlocal standalone buildを実行し、171 MBのarm64 `Research RAG.app`を生成した。Info.plistは`CFBundleIdentifier=io.github.atraz-yuya.research-rag`、`CFBundleShortVersionString=0.1.0`、`CFBundleVersion=0.1.0`となり、bundle内にDB、settings、PDFを含まないことを確認した。review修正版ではbuild-time plugin注入をlocal／release dry-runと自動テストで確認し、full Nuitka buildは再実行していない
 - Codex managed filesystemが付与する`com.apple.provenance`／Finder属性によりhelper内のcodesignが一度拒否された。これはIssue 026と同じ環境固有条件で、許可された外側で生成bundleの属性を除去した後、local ad-hoc署名と`codesign --verify --deep --strict`を成功させた
 - Developer ID Application identityは0件で、`RESEARCH_RAG_NOTARY_PROFILE`も未設定だった。そのため実Developer ID signing、実notary submission、stapling、Gatekeeper verification、最終release ZIP生成は実施していない。accepted／rejected release workflowはfake command integration testでのみ確認した
-- `QT_QPA_PLATFORM=offscreen python -X faulthandler -m pytest`で全427件を成功させ、worker／MainWindow teardown 48件をfaulthandler付きfresh processで5回連続成功させた
+- review修正後にlocal build dry-runとrelease dry-runを再実行し、Nuitka commandへbuild-time metadata pluginが渡されることと、release dry-runが署名／Keychain／networkへ触れないことを確認した
+- `QT_QPA_PLATFORM=offscreen python -X faulthandler -m pytest`で全428件を成功させ、worker／MainWindow teardown 48件をfaulthandler付きfresh processで5回連続成功させた
 
 ### 互換性と今回の対象外
 

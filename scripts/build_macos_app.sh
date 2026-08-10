@@ -55,10 +55,15 @@ cp "$REPOSITORY_ROOT/pysidedeploy.spec" "$BUILD_SPEC"
 "$PYTHON_COMMAND" "$REPOSITORY_ROOT/scripts/release_metadata.py" \
     --pyproject "$REPOSITORY_ROOT/pyproject.toml" prepare-spec \
     --source "$REPOSITORY_ROOT/pysidedeploy.spec" \
-    --destination "$BUILD_SPEC"
+    --destination "$BUILD_SPEC" \
+    --bundle-metadata-plugin \
+        "$REPOSITORY_ROOT/scripts/nuitka_bundle_metadata_plugin.py"
+VERSION=$("$PYTHON_COMMAND" "$REPOSITORY_ROOT/scripts/release_metadata.py" \
+    --pyproject "$REPOSITORY_ROOT/pyproject.toml" version)
 
 if [ "$DRY_RUN" = true ]; then
-    "$DEPLOY_COMMAND" -c "$BUILD_SPEC" --mode standalone \
+    RESEARCH_RAG_BUNDLE_VERSION="$VERSION" \
+        "$DEPLOY_COMMAND" -c "$BUILD_SPEC" --mode standalone \
         --nuitka-version "$NUITKA_VERSION" --dry-run -f
     exit 0
 fi
@@ -66,8 +71,9 @@ fi
 # Remove only the expected ignored output so a failed deployment cannot be
 # mistaken for success because of a stale bundle from an earlier build.
 rm -rf -- "$EXPECTED_APP"
-"$DEPLOY_COMMAND" -c "$BUILD_SPEC" --mode standalone \
-    --nuitka-version "$NUITKA_VERSION" -f
+RESEARCH_RAG_BUNDLE_VERSION="$VERSION" \
+    "$DEPLOY_COMMAND" -c "$BUILD_SPEC" --mode standalone \
+        --nuitka-version "$NUITKA_VERSION" -f
 
 if [ ! -d "$EXPECTED_APP" ]; then
     echo "Error: pyside6-deploy finished without creating $EXPECTED_APP" >&2
@@ -79,9 +85,6 @@ if [ ! -x "$EXPECTED_EXECUTABLE" ]; then
     exit 1
 fi
 
-"$PYTHON_COMMAND" "$REPOSITORY_ROOT/scripts/release_metadata.py" \
-    --pyproject "$REPOSITORY_ROOT/pyproject.toml" update-bundle \
-    --info-plist "$EXPECTED_APP/Contents/Info.plist"
 "$PYTHON_COMMAND" "$REPOSITORY_ROOT/scripts/release_metadata.py" \
     --pyproject "$REPOSITORY_ROOT/pyproject.toml" verify-bundle \
     --info-plist "$EXPECTED_APP/Contents/Info.plist"

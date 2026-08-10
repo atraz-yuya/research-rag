@@ -124,6 +124,7 @@ trap 'rm -f -- "$RELEASE_SPEC"' EXIT HUP INT TERM
     --source "$REPOSITORY_ROOT/pysidedeploy.spec" \
     --destination "$RELEASE_SPEC" \
     --exec-directory "$RELEASE_DIRECTORY" \
+    --bundle-metadata-plugin "$SCRIPT_DIR/nuitka_bundle_metadata_plugin.py" \
     --signing-identity "$IDENTITY"
 
 # Remove only this workflow's known outputs. The release build must never use a
@@ -133,8 +134,9 @@ NOTARY_RESULT="$RELEASE_DIRECTORY/notarytool-result.json"
 rm -rf -- "$EXPECTED_APP"
 rm -f -- "$INTERMEDIATE_ZIP" "$NOTARY_RESULT"
 
-"$DEPLOY_COMMAND" -c "$RELEASE_SPEC" --mode standalone \
-    --nuitka-version "$NUITKA_VERSION" -f
+RESEARCH_RAG_BUNDLE_VERSION="$VERSION" \
+    "$DEPLOY_COMMAND" -c "$RELEASE_SPEC" --mode standalone \
+        --nuitka-version "$NUITKA_VERSION" -f
 
 EXPECTED_EXECUTABLE="$EXPECTED_APP/Contents/MacOS/run_gui"
 if [ ! -x "$EXPECTED_EXECUTABLE" ]; then
@@ -142,15 +144,6 @@ if [ ! -x "$EXPECTED_EXECUTABLE" ]; then
     exit 1
 fi
 
-"$PYTHON_COMMAND" "$SCRIPT_DIR/release_metadata.py" \
-    --pyproject "$REPOSITORY_ROOT/pyproject.toml" update-bundle \
-    --info-plist "$EXPECTED_APP/Contents/Info.plist"
-if ! (/usr/bin/xattr -cr "$EXPECTED_APP" && \
-    "$CODESIGN_COMMAND" --force --deep --options runtime --timestamp \
-        --sign "$IDENTITY" "$EXPECTED_APP"); then
-    echo "Error: unable to apply the final Developer ID signature." >&2
-    exit 1
-fi
 "$PYTHON_COMMAND" "$SCRIPT_DIR/release_metadata.py" \
     --pyproject "$REPOSITORY_ROOT/pyproject.toml" verify-bundle \
     --info-plist "$EXPECTED_APP/Contents/Info.plist"

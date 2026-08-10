@@ -64,6 +64,7 @@ def prepare_deploy_spec(
     pyproject_path: Path,
     signing_identity: str | None = None,
     exec_directory: str | None = None,
+    bundle_metadata_plugin: Path | None = None,
 ) -> None:
     """Write a disposable deploy spec with authoritative release metadata."""
 
@@ -84,6 +85,8 @@ def prepare_deploy_spec(
             f"--macos-app-version={version}",
         )
     )
+    if bundle_metadata_plugin is not None:
+        arguments.append(f"--user-plugin={bundle_metadata_plugin.resolve()}")
     if signing_identity is not None:
         arguments.extend(
             (
@@ -124,22 +127,6 @@ def verify_bundle_info(info_plist: Path, *, pyproject_path: Path) -> None:
         raise MetadataError("Invalid macOS bundle metadata: " + "; ".join(mismatches))
 
 
-def update_bundle_info(info_plist: Path, *, pyproject_path: Path) -> None:
-    """Apply authoritative identifier/version values before final signing."""
-
-    version = read_project_version(pyproject_path)
-    try:
-        with info_plist.open("rb") as plist_file:
-            values = plistlib.load(plist_file)
-        values["CFBundleIdentifier"] = BUNDLE_IDENTIFIER
-        values["CFBundleShortVersionString"] = version
-        values["CFBundleVersion"] = version
-        with info_plist.open("wb") as plist_file:
-            plistlib.dump(values, plist_file, sort_keys=False)
-    except (OSError, plistlib.InvalidFileException) as error:
-        raise MetadataError(f"Could not update bundle metadata at {info_plist}") from error
-
-
 def parse_notary_result(result_path: Path) -> tuple[str | None, str | None]:
     """Return the submission ID and status from notarytool JSON output."""
 
@@ -171,12 +158,10 @@ def _build_parser() -> argparse.ArgumentParser:
     prepare_parser.add_argument("--destination", type=Path, required=True)
     prepare_parser.add_argument("--signing-identity")
     prepare_parser.add_argument("--exec-directory")
+    prepare_parser.add_argument("--bundle-metadata-plugin", type=Path)
 
     verify_parser = subparsers.add_parser("verify-bundle")
     verify_parser.add_argument("--info-plist", type=Path, required=True)
-
-    update_parser = subparsers.add_parser("update-bundle")
-    update_parser.add_argument("--info-plist", type=Path, required=True)
 
     notary_parser = subparsers.add_parser("notary-result")
     notary_parser.add_argument("--result", type=Path, required=True)
@@ -199,14 +184,10 @@ def main(argv: list[str] | None = None) -> int:
                 pyproject_path=arguments.pyproject,
                 signing_identity=arguments.signing_identity,
                 exec_directory=arguments.exec_directory,
+                bundle_metadata_plugin=arguments.bundle_metadata_plugin,
             )
         elif arguments.command == "verify-bundle":
             verify_bundle_info(
-                arguments.info_plist,
-                pyproject_path=arguments.pyproject,
-            )
-        elif arguments.command == "update-bundle":
-            update_bundle_info(
                 arguments.info_plist,
                 pyproject_path=arguments.pyproject,
             )
