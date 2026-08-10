@@ -6,6 +6,7 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 REPOSITORY_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 SYSTEM_NAME=${RESEARCH_RAG_BUILD_SYSTEM_NAME:-$(uname -s)}
 DEPLOY_COMMAND=${PYSIDE6_DEPLOY:-pyside6-deploy}
+PYTHON_COMMAND=${RESEARCH_RAG_PYTHON:-python}
 EXPECTED_APP="$REPOSITORY_ROOT/build/deploy/Research RAG.app"
 EXPECTED_EXECUTABLE="$EXPECTED_APP/Contents/MacOS/run_gui"
 DRY_RUN=false
@@ -30,6 +31,11 @@ if ! command -v "$DEPLOY_COMMAND" >/dev/null 2>&1; then
     exit 1
 fi
 
+if ! command -v "$PYTHON_COMMAND" >/dev/null 2>&1; then
+    echo "Error: Python was not found. Activate the project virtual environment." >&2
+    exit 1
+fi
+
 cd "$REPOSITORY_ROOT"
 mkdir -p build/deploy
 
@@ -46,6 +52,10 @@ fi
 BUILD_SPEC=$(mktemp "$REPOSITORY_ROOT/.pysidedeploy.build.XXXXXX")
 trap 'rm -f -- "$BUILD_SPEC"' EXIT HUP INT TERM
 cp "$REPOSITORY_ROOT/pysidedeploy.spec" "$BUILD_SPEC"
+"$PYTHON_COMMAND" "$REPOSITORY_ROOT/scripts/release_metadata.py" \
+    --pyproject "$REPOSITORY_ROOT/pyproject.toml" prepare-spec \
+    --source "$REPOSITORY_ROOT/pysidedeploy.spec" \
+    --destination "$BUILD_SPEC"
 
 if [ "$DRY_RUN" = true ]; then
     "$DEPLOY_COMMAND" -c "$BUILD_SPEC" --mode standalone \
@@ -68,6 +78,13 @@ if [ ! -x "$EXPECTED_EXECUTABLE" ]; then
     echo "Error: pyside6-deploy created a bundle without an executable at $EXPECTED_EXECUTABLE" >&2
     exit 1
 fi
+
+"$PYTHON_COMMAND" "$REPOSITORY_ROOT/scripts/release_metadata.py" \
+    --pyproject "$REPOSITORY_ROOT/pyproject.toml" update-bundle \
+    --info-plist "$EXPECTED_APP/Contents/Info.plist"
+"$PYTHON_COMMAND" "$REPOSITORY_ROOT/scripts/release_metadata.py" \
+    --pyproject "$REPOSITORY_ROOT/pyproject.toml" verify-bundle \
+    --info-plist "$EXPECTED_APP/Contents/Info.plist"
 
 # macOS code signing rejects Finder/resource-fork extended attributes. Clear
 # them immediately before the mandatory local ad-hoc signature, then validate

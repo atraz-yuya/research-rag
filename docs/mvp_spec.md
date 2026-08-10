@@ -21,6 +21,8 @@
 - PySide6デスクトップGUIで保存済み資料セットを管理し、質問できる
 - GUIで資料セット内の文書名、source path、`CURRENT`／`MODIFIED`／`MISSING`／`UNKNOWN`状態を確認できる
 - PySide6公式の`pyside6-deploy`でローカル動作確認用のstandalone macOS `.app`を再現できる
+- stable bundle identifierとproject versionを反映したmacOS `.app`を再現できる
+- credentialを外部から渡すrelease helperでDeveloper ID署名、hardened runtime、notarization、stapling、配布ZIP作成を実行できる
 
 ## MVPの対象外
 
@@ -34,13 +36,11 @@
 - フォルダやglobによるPDFの自動収集
 - source fileの自動監視・自動再index
 - 欠落PDFの移動先検索やrename workflow
-- Developer ID署名
-- hardened runtime
-- notarization
 - DMG／Mac App Store配布
 - custom app icon
 - auto update
 - cross-platform installer
+- GitHub Release automation
 
 ## エラーとして扱うもの
 
@@ -122,7 +122,13 @@ WidgetはSQL、PDF処理、Chunking、embedding、retrieval、generationを実�
 
 repository直下の`run_gui.py`は`research_rag.gui_app.main()`だけを呼び出すdeploy用launcherとし、GUI初期化やRAG処理を複製しない。`pysidedeploy.spec`はPySide6公式`pyside6-deploy`のstandalone modeを使用し、成果物をGit管理外の`build/deploy/Research RAG.app`へ生成する。PyInstallerは併用しない。
 
-`scripts/build_macos_app.sh`はmacOSと`pyside6-deploy`の存在を事前検証し、repository内のspecを一時コピーしてbuildする。生成bundleはFinder/resource-fork extended attributeを除去してローカル用ad-hoc署名を付け、実行ファイルの存在とstrict code-signature validationを成功条件とする。Developer ID署名は行わない。通常のpytestは設定とhelperのintegration boundaryだけを検証し、Nuitkaによるfull buildは実行しない。
+`scripts/build_macos_app.sh`はmacOSと`pyside6-deploy`の存在を事前検証し、repository内のspecを一時コピーしてbuildする。生成bundleはFinder/resource-fork extended attributeを除去してローカル用ad-hoc署名を付け、実行ファイルの存在とstrict code-signature validationを成功条件とする。このlocal helperはApple Developer credentialsを要求せず、Developer ID署名は行わない。通常のpytestは設定とhelperのintegration boundaryだけを検証し、Nuitkaによるfull buildは実行しない。
+
+macOS bundle identifierは`io.github.atraz-yuya.research-rag`で固定する。versionの唯一のsourceは`pyproject.toml`の`[project].version`とし、packaging時に`CFBundleShortVersionString`と`CFBundleVersion`へ同じ値を反映する。production Python packageへversion定数を複製しない。
+
+`scripts/release_macos_app.sh`はlocal helperと分離し、環境変数で明示されたDeveloper ID Application identityとnotarytool Keychain profileを必須とする。ad-hoc署名へfallbackせず、hardened runtimeとsecure timestampを伴う署名、signature／entitlement検証、`ditto`による事前ZIP、`xcrun notarytool submit --wait`、staple／validate、codesign／Gatekeeper検証を順に行う。Accepted後にだけ、実際のMach-O architectureとproject versionを名前に含む最終ZIPを`build/release`へ生成する。notarization失敗時はsubmission IDとlog確認経路を残す。`--dry-run`は必要値とstageだけを表示し、署名、Keychain変更、network accessを行わない。
+
+release identityのcertificate／秘密鍵／password／Team ID、notary credentialはGit管理しない。release scriptはKeychain profile名だけを受け取り、`altool`やplaintext passwordを使用しない。DMG、Mac App Store、GitHub Release automation、custom iconは対象外とする。
 
 bundleへcorpus DBの`indexes.sqlite3`、GUI設定の`settings.ini`、source PDF、Ollama本体、Ollama modelを含めない。runtime data pathは既存の`QStandardPaths.AppDataLocation`を維持し、bundle内部へDBや設定を書き込まない。Ollama接続には保存済みGUI runtime設定のbase URLを使用する。corpus SQLite schemaはversion 3のままとし、CLI、`python -m research_rag.gui_app`、worker／teardownの動作を変更しない。
 
