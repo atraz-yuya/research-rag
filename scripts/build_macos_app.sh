@@ -7,8 +7,11 @@ REPOSITORY_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 SYSTEM_NAME=${RESEARCH_RAG_BUILD_SYSTEM_NAME:-$(uname -s)}
 DEPLOY_COMMAND=${PYSIDE6_DEPLOY:-pyside6-deploy}
 PYTHON_COMMAND=${RESEARCH_RAG_PYTHON:-python}
+ICON_GENERATOR=${RESEARCH_RAG_ICON_GENERATOR:-$REPOSITORY_ROOT/scripts/generate_app_icon.py}
+ICON_OUTPUT=${RESEARCH_RAG_ICON_OUTPUT:-$REPOSITORY_ROOT/build/generated/ResearchRAG.icns}
 EXPECTED_APP="$REPOSITORY_ROOT/build/deploy/Research RAG.app"
 EXPECTED_EXECUTABLE="$EXPECTED_APP/Contents/MacOS/run_gui"
+EXPECTED_ICON_RESOURCE="$EXPECTED_APP/Contents/Resources/ResearchRAG.icns"
 DRY_RUN=false
 
 if [ "${1:-}" = "--dry-run" ]; then
@@ -39,6 +42,16 @@ fi
 cd "$REPOSITORY_ROOT"
 mkdir -p build/deploy
 
+if [ "$DRY_RUN" = true ]; then
+    "$PYTHON_COMMAND" "$ICON_GENERATOR" --output "$ICON_OUTPUT" --dry-run
+else
+    "$PYTHON_COMMAND" "$ICON_GENERATOR" --output "$ICON_OUTPUT"
+    if [ ! -f "$ICON_OUTPUT" ]; then
+        echo "Error: icon generator did not create $ICON_OUTPUT" >&2
+        exit 1
+    fi
+fi
+
 NUITKA_VERSION=$(awk -F'==' '/^packages = Nuitka==/ {print $2; exit}' \
     "$REPOSITORY_ROOT/pysidedeploy.spec")
 if [ -z "$NUITKA_VERSION" ]; then
@@ -57,7 +70,8 @@ cp "$REPOSITORY_ROOT/pysidedeploy.spec" "$BUILD_SPEC"
     --source "$REPOSITORY_ROOT/pysidedeploy.spec" \
     --destination "$BUILD_SPEC" \
     --bundle-metadata-plugin \
-        "$REPOSITORY_ROOT/scripts/nuitka_bundle_metadata_plugin.py"
+        "$REPOSITORY_ROOT/scripts/nuitka_bundle_metadata_plugin.py" \
+    --icon "$ICON_OUTPUT"
 VERSION=$("$PYTHON_COMMAND" "$REPOSITORY_ROOT/scripts/release_metadata.py" \
     --pyproject "$REPOSITORY_ROOT/pyproject.toml" version)
 
@@ -82,6 +96,11 @@ fi
 
 if [ ! -x "$EXPECTED_EXECUTABLE" ]; then
     echo "Error: pyside6-deploy created a bundle without an executable at $EXPECTED_EXECUTABLE" >&2
+    exit 1
+fi
+
+if [ ! -f "$EXPECTED_ICON_RESOURCE" ]; then
+    echo "Error: the generated bundle does not contain $EXPECTED_ICON_RESOURCE" >&2
     exit 1
 fi
 

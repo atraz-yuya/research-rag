@@ -726,3 +726,35 @@ corpus SQLite schema v3、GUI settings semantics、UUID、DocumentStatus、PDF R
 ### 互換性と今回の対象外
 
 GUI、RAG pipeline、CLI、corpus SQLite schema v3、QStandardPaths、QtTaskRunner／teardownは変更していない。DMG、Mac App Store、custom icon、auto update、cross-platform installer、GitHub Release automationは追加していない。
+
+## Issue 028: Add macOS app icon, DMG packaging, and draft GitHub release flow
+
+実施日: 2026-08-10
+
+### 実施内容
+
+- PySide6の`QImage`／`QPainter`だけで、documentとconnected evidence nodesを表すsquare／unmaskedな1024px master iconを決定的に描画するgeneratorを追加した。文字、`RAG` lettering、他製品markは使用していない
+- 同じmasterから16／32／128／256／512 pointのstandard／Retina PNGを生成し、macOSの`iconutil`で`build/generated/ResearchRAG.icns`へ変換する。generated PNG／iconset／ICNSはGit管理しない
+- FileProvider管理workspaceのquarantine／provenance属性で`iconutil`がvalid iconsetを拒否する環境に対応するため、削除対象を既知のgenerated iconset／ICNSだけに限定して属性を除去するようにした
+- local／release helperの一時`pyside6-deploy` specへgenerated ICNSを渡し、app署名前に`Contents/Resources/ResearchRAG.icns`と`CFBundleIconFile`を完成させるようにした。Developer ID署名後のicon／Info.plist書換えは行わない
+- build済みappを受け取り、temporary stagingへ`Research RAG.app`と`Applications -> /Applications`だけを置いてread-only UDZO DMGを作るhelperを追加した。actual Mach-O architectureとproject versionをartifact名に使い、`hdiutil verify`成功を完了条件とした
+- canonical release artifactをZIPからDMGへ変更した。NuitkaがDeveloper ID署名したappを検証後、DMGを`io.github.atraz-yuya.research-rag.dmg`としてDeveloper ID Applicationで署名し、DMG自体を`notarytool submit --wait`へ送る。Accepted後はDMGへstapleし、codesign／hdiutil／Gatekeeper検証後にchecksumを生成する
+- DMG signingでは`codesign --deep`を使用せず、appもDMG作成後に再署名しない。checksumはstaplingでartifactが確定した後にだけ作成する
+- `prepare_github_release.sh`を追加し、dry-runはtag／Release／assetを変更せずversion、期待tag、artifact、draft状態を表示するようにした。実pathも既存local／remote tagとintended HEADを検証し、`gh release create --verify-tag --draft`でDMGとchecksumを添付するだけで、tag作成／pushとpublishは行わない
+- icon、DMG staging、notary対象、署名順、checksum順、architecture名、tag検証、draft-only GitHub Release、生成artifact非追跡をfake command／`tmp_path`で確認する単体テストを追加した。通常testでfull Nuitka build、real mount、Apple credential、GitHub Releaseを使用しない
+- `docs/release_checklist.md`を追加し、tests、teardown、local app／icon／DMG、Developer ID、notarization、checksum、tag、draft Release、downloaded artifact smoke、最後のmanual publishを順に確認できるようにした
+
+### 実機確認
+
+- macOS 26.5.2 arm64、Python 3.11.15、PySide6 6.11.1、Nuitka 4.1.3でreal icon generatorを実行し、標準10 representationsを含む423 KBの`ResearchRAG.icns`を生成した。`iconutil`によるiconsetへの読み戻しにも成功した
+- local build dry-runでNuitkaへ`--macos-app-icon=.../ResearchRAG.icns`が渡されることを確認し、real standalone buildで170 MBのarm64 appを生成した。Info.plistはbundle identifier、両version、`CFBundleIconFile=ResearchRAG.icns`が正しく、Resources内ICNSも確認した
+- Codex managed workspaceではNuitkaとhelperのad-hoc codesignがFileProvider属性により拒否された。生成appを`ditto --norsrc`で通常filesystemへcopyし、その限定copyで属性除去、ad-hoc署名、`codesign --verify --deep --strict`を成功させた
+- ad-hoc署名済みappからcredential-freeな`Research-RAG-0.1.0-macos-arm64.dmg`を実作成し、`hdiutil verify`に成功した。read-only mountにはappと`Applications` symlinkの2項目だけがあり、symlinkが正確に`/Applications`を指すことを確認した
+- mounted appを安全な一時領域へcopyし、署名を再検証してOllamaなしのoffscreen empty GUI event loopへ到達した。DBはbundle外の`~/Library/Application Support/ResearchRAG/indexes.sqlite3`、settings pathも同じbundle外directoryへ解決され、app内にDB／settings／PDFがないことを確認してclean detachした
+- local build、release、GitHub Release preparationの各dry-runを成功させた。GitHub Release dry-runではtag作成、push、Release作成、asset uploadを行っていない
+- Developer ID Application identityは0件で、notary profileも未設定だった。そのためreal DMG signing、real DMG notarization、stapling、Gatekeeper release検証、checksum生成は実施していない。real GitHub tag／Releaseも作成していない
+- `QT_QPA_PLATFORM=offscreen python -X faulthandler -m pytest`で全441件を成功させ、worker／MainWindow teardown 48件をfaulthandler付きfresh processで5回連続成功させた
+
+### 互換性と今回の対象外
+
+GUI／RAG／CLI、corpus SQLite schema v3、QStandardPaths、model defaults、citation semantics、QtTaskRunner／teardown、Issue 027のNuitka Developer ID app-signing設計は変更していない。Mac App Store、auto update、custom DMG background、real tag／public GitHub Releaseは追加していない。

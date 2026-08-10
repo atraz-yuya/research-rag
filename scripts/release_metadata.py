@@ -16,6 +16,8 @@ from pathlib import Path
 
 APP_NAME = "Research RAG"
 BUNDLE_IDENTIFIER = "io.github.atraz-yuya.research-rag"
+APP_ICON_FILENAME = "ResearchRAG.icns"
+DMG_IDENTIFIER = "io.github.atraz-yuya.research-rag.dmg"
 _SUPPORTED_VERSION = re.compile(r"^[0-9]+(?:\.[0-9]+){1,2}$")
 _MANAGED_NUITKA_OPTIONS = (
     "--macos-app-name",
@@ -65,6 +67,7 @@ def prepare_deploy_spec(
     signing_identity: str | None = None,
     exec_directory: str | None = None,
     bundle_metadata_plugin: Path | None = None,
+    icon_path: Path | None = None,
 ) -> None:
     """Write a disposable deploy spec with authoritative release metadata."""
 
@@ -98,6 +101,12 @@ def prepare_deploy_spec(
     config["nuitka"]["extra_args"] = shlex.join(arguments)
     if exec_directory is not None:
         config["app"]["exec_directory"] = exec_directory
+    if icon_path is not None:
+        if icon_path.name != APP_ICON_FILENAME:
+            raise MetadataError(
+                f"macOS application icon must be named {APP_ICON_FILENAME}"
+            )
+        config["app"]["icon"] = str(icon_path.resolve())
 
     with destination.open("w", encoding="utf-8") as destination_file:
         config.write(destination_file)
@@ -117,6 +126,7 @@ def verify_bundle_info(info_plist: Path, *, pyproject_path: Path) -> None:
         "CFBundleIdentifier": BUNDLE_IDENTIFIER,
         "CFBundleShortVersionString": version,
         "CFBundleVersion": version,
+        "CFBundleIconFile": APP_ICON_FILENAME,
     }
     mismatches = [
         f"{key}={values.get(key)!r} (expected {value!r})"
@@ -152,6 +162,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("version")
     subparsers.add_parser("bundle-identifier")
+    subparsers.add_parser("dmg-identifier")
 
     prepare_parser = subparsers.add_parser("prepare-spec")
     prepare_parser.add_argument("--source", type=Path, required=True)
@@ -159,6 +170,7 @@ def _build_parser() -> argparse.ArgumentParser:
     prepare_parser.add_argument("--signing-identity")
     prepare_parser.add_argument("--exec-directory")
     prepare_parser.add_argument("--bundle-metadata-plugin", type=Path)
+    prepare_parser.add_argument("--icon", type=Path)
 
     verify_parser = subparsers.add_parser("verify-bundle")
     verify_parser.add_argument("--info-plist", type=Path, required=True)
@@ -177,6 +189,8 @@ def main(argv: list[str] | None = None) -> int:
             print(read_project_version(arguments.pyproject))
         elif arguments.command == "bundle-identifier":
             print(BUNDLE_IDENTIFIER)
+        elif arguments.command == "dmg-identifier":
+            print(DMG_IDENTIFIER)
         elif arguments.command == "prepare-spec":
             prepare_deploy_spec(
                 arguments.source,
@@ -185,6 +199,7 @@ def main(argv: list[str] | None = None) -> int:
                 signing_identity=arguments.signing_identity,
                 exec_directory=arguments.exec_directory,
                 bundle_metadata_plugin=arguments.bundle_metadata_plugin,
+                icon_path=arguments.icon,
             )
         elif arguments.command == "verify-bundle":
             verify_bundle_info(
