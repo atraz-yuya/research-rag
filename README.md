@@ -181,7 +181,7 @@ macOSでは、PySide6公式の`pyside6-deploy`を使ってstandaloneな`Research
 ./scripts/build_macos_app.sh
 ```
 
-成果物は`build/deploy/Research RAG.app`です。build helperはdry-runを含めて内部で`pyside6-deploy`を呼び、specに記録したNuitka versionも明示的に適用します。macOS以外、または有効な環境に`pyside6-deploy`がない場合は理由を表示して失敗します。実ビルドでは環境固有の値が追跡中の設定へ書き戻されないよう、repositoryの`pysidedeploy.spec`を一時コピーして使用します。生成後はFinder/resource-fork属性を除去してローカル用のad-hoc署名を付け、strict検証まで成功した場合だけbuild完了とします。これはDeveloper ID署名ではありません。開発時の`python -m research_rag.gui_app`とCLIは従来どおり利用できます。
+成果物は`build/deploy/Research RAG.app`です。build helperはdry-runを含めて内部で`pyside6-deploy`を呼び、specに記録したNuitka versionも明示的に適用します。macOS以外、または有効な環境に`pyside6-deploy`がない場合は理由を表示して失敗します。実ビルドでは環境固有値が追跡中の設定へ書き戻されないよう、repositoryの`pysidedeploy.spec`を一時コピーして使用します。bundle identifierは`io.github.atraz-yuya.research-rag`、`CFBundleShortVersionString`と`CFBundleVersion`は`pyproject.toml`の`[project].version`から設定されます。Nuitka user pluginが両version fieldをbundle署名前に完成させるため、署名後にInfo.plistを書き換えません。生成後はFinder/resource-fork属性を除去してローカル用のad-hoc署名を付け、strict検証まで成功した場合だけbuild完了とします。Apple Developer credentialsは不要ですが、Developer ID署名ではありません。開発時の`python -m research_rag.gui_app`とCLIは従来どおり利用できます。
 
 ローカルでbuildしたDeveloper ID未署名（ad-hoc署名）のアプリは、次のように起動できます。
 
@@ -191,7 +191,35 @@ open "build/deploy/Research RAG.app"
 
 `.app`には`indexes.sqlite3`、`settings.ini`、PDF、Ollama本体、Ollama modelを含めません。DBと設定は起動後も`QStandardPaths.AppDataLocation`（macOSでは通常`~/Library/Application Support/ResearchRAG`）へ保存され、app bundle内部には書き込みません。Ollamaは別途起動・model準備が必要で、接続先にはGUIで保存したOllama URLを使います。
 
-このbuildはローカル動作確認用です。Developer ID署名、hardened runtime、notarization、DMG、Mac App Store配布、custom icon、auto update、cross-platform installerはまだ対象外です。
+### Developer ID署名とnotarizationを行うrelease build
+
+配布用releaseはローカルbuildとは別のhelperで作成します。まずApple Developer certificateの秘密鍵をKeychainへ登録し、利用可能なidentityを確認します。certificate、秘密鍵、password、Team IDはrepositoryへ保存しません。
+
+```bash
+security find-identity -v -p codesigning
+```
+
+notarytool用credentialは一度だけKeychainへ保存します。次のコマンドはpassword optionを指定しないため、app-specific passwordがterminalのsecure promptで入力されます。`<APPLE_ID>`と`<TEAM_ID>`は手元の値に置き換えてください。
+
+```bash
+xcrun notarytool store-credentials "research-rag-notary" \
+  --apple-id "<APPLE_ID>" \
+  --team-id "<TEAM_ID>"
+```
+
+identityとKeychain profile名だけを環境変数で渡し、先にcredential-freeなdry-runを確認します。release helperはad-hoc署名へfallbackしません。
+
+```bash
+export RESEARCH_RAG_DEVELOPER_ID_APPLICATION="Developer ID Application: Your Name (TEAMID)"
+export RESEARCH_RAG_NOTARY_PROFILE="research-rag-notary"
+
+./scripts/release_macos_app.sh --dry-run
+./scripts/release_macos_app.sh
+```
+
+実releaseではbuild前にidentifierとversionをNuitkaへ渡し、NuitkaがDeveloper ID署名したbundleを変更せずにhardened runtime、secure timestamp、authority、entitlementsを検証します。release helper自身は`codesign --deep --force`で再署名しません。そのbundleを事前ZIPへまとめて`xcrun notarytool submit --wait`へ送り、Accepted後にticketをstaple／validateし、codesignとGatekeeperで検証してから、実際のMach-O architectureを読んで`build/release/Research-RAG-<version>-macos-<architecture>.zip`を生成します。失敗時はnotarytool resultの保存先とsubmission IDを表示し、取得できる場合はnotarization logも表示します。dry-runはbuild、署名、Keychain変更、Appleへの通信を行いません。
+
+現段階ではDMG、Mac App Store、custom icon、auto update、cross-platform installer、GitHub Release自動化には対応しません。
 
 ## CLIの実行
 

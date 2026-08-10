@@ -12,3 +12,8 @@ deployment/
 *.egg-info/
 *.app/
 /.pysidedeploy.build.*
+/.pysidedeploy.release.*
+*.cer
+*.p12
+*.mobileprovision
+/AuthKey_*.p8
