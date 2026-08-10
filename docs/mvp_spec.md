@@ -22,7 +22,10 @@
 - GUIで資料セット内の文書名、source path、`CURRENT`／`MODIFIED`／`MISSING`／`UNKNOWN`状態を確認できる
 - PySide6公式の`pyside6-deploy`でローカル動作確認用のstandalone macOS `.app`を再現できる
 - stable bundle identifierとproject versionを反映したmacOS `.app`を再現できる
-- credentialを外部から渡すrelease helperでDeveloper ID署名、hardened runtime、notarization、stapling、配布ZIP作成を実行できる
+- project専用iconを決定的に生成し、署名前のmacOS `.app`へ組み込める
+- credential-freeなlocal DMGを作成して整合性を検証できる
+- credentialを外部から渡すrelease helperでDeveloper ID署名、hardened runtime、DMG notarization、stapling、checksum作成を実行できる
+- 既存tagを前提にDMGとchecksumを添付するdraft GitHub Releaseを明示操作で準備できる
 
 ## MVPの対象外
 
@@ -36,11 +39,10 @@
 - フォルダやglobによるPDFの自動収集
 - source fileの自動監視・自動再index
 - 欠落PDFの移動先検索やrename workflow
-- DMG／Mac App Store配布
-- custom app icon
+- Mac App Store配布
 - auto update
 - cross-platform installer
-- GitHub Release automation
+- GitHub Releaseの自動publish
 
 ## エラーとして扱うもの
 
@@ -122,13 +124,19 @@ WidgetはSQL、PDF処理、Chunking、embedding、retrieval、generationを実�
 
 repository直下の`run_gui.py`は`research_rag.gui_app.main()`だけを呼び出すdeploy用launcherとし、GUI初期化やRAG処理を複製しない。`pysidedeploy.spec`はPySide6公式`pyside6-deploy`のstandalone modeを使用し、成果物をGit管理外の`build/deploy/Research RAG.app`へ生成する。PyInstallerは併用しない。
 
-`scripts/build_macos_app.sh`はmacOSと`pyside6-deploy`の存在を事前検証し、repository内のspecを一時コピーしてbuildする。生成bundleはFinder/resource-fork extended attributeを除去してローカル用ad-hoc署名を付け、実行ファイルの存在とstrict code-signature validationを成功条件とする。このlocal helperはApple Developer credentialsを要求せず、Developer ID署名は行わない。通常のpytestは設定とhelperのintegration boundaryだけを検証し、Nuitkaによるfull buildは実行しない。
+`scripts/generate_app_icon.py`は既存PySide6の描画APIで文字を含まないsquare masterを生成する。documentとconnected evidence nodeを単純なblue／indigo geometryで表し、同じ1024px masterから標準／Retina iconset PNGを決定的に作る。macOSの`iconutil`で`build/generated/ResearchRAG.icns`へ変換し、生成PNG／iconset／ICNSはGit管理しない。FileProvider属性の除去対象は既知のgenerated iconset／ICNSだけに限定する。
+
+`scripts/build_macos_app.sh`はmacOSと`pyside6-deploy`の存在を事前検証し、実buildではiconを生成してrepository内specの一時コピーへ絶対pathを設定してからbuildする。生成bundleの`Contents/Resources/ResearchRAG.icns`と`CFBundleIconFile`を検証し、Finder/resource-fork extended attributeを除去してローカル用ad-hoc署名を付け、実行ファイルの存在とstrict code-signature validationを成功条件とする。このlocal helperはApple Developer credentialsを要求せず、Developer ID署名は行わない。通常のpytestは設定とhelperのintegration boundaryだけを検証し、Nuitka full buildやreal DMG mountは実行しない。
 
 macOS bundle identifierは`io.github.atraz-yuya.research-rag`で固定する。versionの唯一のsourceは`pyproject.toml`の`[project].version`とし、packaging時に`CFBundleShortVersionString`と`CFBundleVersion`へ同じ値を反映する。Nuitka 4.1.3が直接生成しない`CFBundleVersion`は専用Nuitka user pluginでInfo.plist書出し時に追加し、Developer ID署名前にmetadataを完成させる。production Python packageへversion定数を複製しない。
 
-`scripts/release_macos_app.sh`はlocal helperと分離し、環境変数で明示されたDeveloper ID Application identityとnotarytool Keychain profileを必須とする。ad-hoc署名へfallbackせず、build前にmetadataとNuitka native signing optionを渡す。Developer ID署名後はInfo.plistやbundleを変更・再署名せず、hardened runtime、secure timestamp、authority、entitlementを検証してから、`ditto`による事前ZIP、`xcrun notarytool submit --wait`、staple／validate、codesign／Gatekeeper検証を順に行う。release signingに`codesign --deep --force`を使わない一方、`codesign --verify --deep --strict`はbundle全体のverificationに使用する。Accepted後にだけ、実際のMach-O architectureとproject versionを名前に含む最終ZIPを`build/release`へ生成する。notarization失敗時はsubmission IDとlog確認経路を残す。`--dry-run`は必要値とstageだけを表示し、署名、Keychain変更、network accessを行わない。
+`scripts/package_macos_dmg.sh`はbuild済みappを受け取り、temporary stagingへ`Research RAG.app`と`Applications -> /Applications`だけを配置する。実行ファイルからactual architectureを読み、project versionを含む名前でread-only UDZO DMGを作り、`hdiutil verify`成功後だけ完了する。local appから作るcredential-free DMGはsmoke用であり、Developer ID署名／notarization済み配布物とは扱わない。
 
-release identityのcertificate／秘密鍵／password／Team ID、notary credentialはGit管理しない。release scriptはKeychain profile名だけを受け取り、`altool`やplaintext passwordを使用しない。DMG、Mac App Store、GitHub Release automation、custom iconは対象外とする。
+`scripts/release_macos_app.sh`はlocal helperと分離し、環境変数で明示されたDeveloper ID Application identityとnotarytool Keychain profileを必須とする。ad-hoc署名へfallbackせず、icon、metadata、Nuitka native signing optionをbuild前に渡す。Developer ID署名後はappのicon、Info.plist、bundleを変更・再署名せず、hardened runtime、secure timestamp、authority、entitlementを検証する。署名済みappから作成したDMGを`io.github.atraz-yuya.research-rag.dmg`としてDeveloper ID Applicationで署名し、DMG signingには`codesign --deep`を使用しない。outermost DMG自体を`xcrun notarytool submit --wait`へ送り、Accepted後にDMGへstaple／validateし、codesign／hdiutil／Gatekeeper検証を行う。実architectureとproject versionを含む最終DMGをcanonical artifactとし、stapling後にSHA-256 checksumを生成する。notarization失敗時はsubmission IDとlog確認経路を残す。`--dry-run`は必要値とstageだけを表示し、署名、Keychain変更、network accessを行わない。
+
+release identityのcertificate／秘密鍵／password／Team ID、notary credentialはGit管理しない。release scriptはKeychain profile名だけを受け取り、`altool`やplaintext passwordを使用しない。
+
+`scripts/prepare_github_release.sh`のdry-runはversion、期待tag、DMG、checksum、draft状態を表示するだけで、tag／Release／assetを作成しない。実pathでも既存のlocal／remote `v<version>` tagが意図したHEADを指すこととartifactを検証し、`gh release create --verify-tag --draft`だけを使用する。tagの作成／pushとRelease publishは自動実行しない。
 
 bundleへcorpus DBの`indexes.sqlite3`、GUI設定の`settings.ini`、source PDF、Ollama本体、Ollama modelを含めない。runtime data pathは既存の`QStandardPaths.AppDataLocation`を維持し、bundle内部へDBや設定を書き込まない。Ollama接続には保存済みGUI runtime設定のbase URLを使用する。corpus SQLite schemaはversion 3のままとし、CLI、`python -m research_rag.gui_app`、worker／teardownの動作を変更しない。
 

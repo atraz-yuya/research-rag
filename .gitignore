@@ -11,6 +11,10 @@ build/
 deployment/
 *.egg-info/
 *.app/
+*.dmg
+*.dmg.sha256
+*.iconset/
+*.icns
 /.pysidedeploy.build.*
 /.pysidedeploy.release.*
 *.cer

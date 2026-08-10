@@ -174,14 +174,18 @@ PDF抽出やOllama処理などの実行中は、正確な進捗率を取得で�
 
 ## macOSアプリケーションのビルド
 
-macOSでは、PySide6公式の`pyside6-deploy`を使ってstandaloneな`Research RAG.app`を再現できます。PyInstallerは使用しません。仮想環境を有効化して開発用installを済ませたリポジトリルートで、最初にdry-runを確認し、その後build helperを実行します。
+macOSでは、PySide6公式の`pyside6-deploy`を使ってstandaloneな`Research RAG.app`を再現できます。PyInstallerは使用しません。専用iconはPySide6の描画APIで決定的に生成され、`iconutil`で`build/generated/ResearchRAG.icns`へ変換された後、署名前のapp bundleへ組み込まれます。生成PNG、iconset、ICNSはbuild成果物でありGit管理しません。
+
+### Local development app
+
+仮想環境を有効化して開発用installを済ませたリポジトリルートで、最初にdry-runを確認し、その後build helperを実行します。
 
 ```bash
 ./scripts/build_macos_app.sh --dry-run
 ./scripts/build_macos_app.sh
 ```
 
-成果物は`build/deploy/Research RAG.app`です。build helperはdry-runを含めて内部で`pyside6-deploy`を呼び、specに記録したNuitka versionも明示的に適用します。macOS以外、または有効な環境に`pyside6-deploy`がない場合は理由を表示して失敗します。実ビルドでは環境固有値が追跡中の設定へ書き戻されないよう、repositoryの`pysidedeploy.spec`を一時コピーして使用します。bundle identifierは`io.github.atraz-yuya.research-rag`、`CFBundleShortVersionString`と`CFBundleVersion`は`pyproject.toml`の`[project].version`から設定されます。Nuitka user pluginが両version fieldをbundle署名前に完成させるため、署名後にInfo.plistを書き換えません。生成後はFinder/resource-fork属性を除去してローカル用のad-hoc署名を付け、strict検証まで成功した場合だけbuild完了とします。Apple Developer credentialsは不要ですが、Developer ID署名ではありません。開発時の`python -m research_rag.gui_app`とCLIは従来どおり利用できます。
+成果物は`build/deploy/Research RAG.app`です。build helperは内部でicon generatorと`pyside6-deploy`を呼び、specに記録したNuitka versionも明示的に適用します。macOS以外、または必要なtoolがない場合は理由を表示して失敗します。実ビルドでは環境固有値を書き戻さない一時specを使い、bundle identifierは`io.github.atraz-yuya.research-rag`、両version fieldは`pyproject.toml`から、`CFBundleIconFile`は`ResearchRAG.icns`から設定します。metadataとiconは署名前に完成し、生成後はローカル用ad-hoc署名のstrict検証まで成功した場合だけ完了とします。Apple Developer credentialsは不要ですが、Developer ID署名ではありません。開発時の`python -m research_rag.gui_app`とCLIも従来どおり利用できます。
 
 ローカルでbuildしたDeveloper ID未署名（ad-hoc署名）のアプリは、次のように起動できます。
 
@@ -191,7 +195,17 @@ open "build/deploy/Research RAG.app"
 
 `.app`には`indexes.sqlite3`、`settings.ini`、PDF、Ollama本体、Ollama modelを含めません。DBと設定は起動後も`QStandardPaths.AppDataLocation`（macOSでは通常`~/Library/Application Support/ResearchRAG`）へ保存され、app bundle内部には書き込みません。Ollamaは別途起動・model準備が必要で、接続先にはGUIで保存したOllama URLを使います。
 
-### Developer ID署名とnotarizationを行うrelease build
+### Local DMG smoke artifact
+
+credential-freeなローカルappを、`Research RAG.app`と`Applications -> /Applications`だけを含むread-only UDZO DMGへまとめられます。outputを省略するとproject versionと実際のMach-O architectureから`build/dmg/Research-RAG-<version>-macos-<architecture>.dmg`を決定し、`hdiutil verify`成功後だけ完了します。これはlocal smoke用で、Developer ID署名やnotarization済み配布物ではありません。
+
+```bash
+./scripts/package_macos_dmg.sh "build/deploy/Research RAG.app"
+```
+
+DMGをmountして内容を確認する場合も、`Applications` symlinkを使って実際の`/Applications`へコピーする必要はありません。安全な一時ディレクトリへappをコピーして起動確認してください。
+
+### External release DMG
 
 配布用releaseはローカルbuildとは別のhelperで作成します。まずApple Developer certificateの秘密鍵をKeychainへ登録し、利用可能なidentityを確認します。certificate、秘密鍵、password、Team IDはrepositoryへ保存しません。
 
@@ -217,9 +231,24 @@ export RESEARCH_RAG_NOTARY_PROFILE="research-rag-notary"
 ./scripts/release_macos_app.sh
 ```
 
-実releaseではbuild前にidentifierとversionをNuitkaへ渡し、NuitkaがDeveloper ID署名したbundleを変更せずにhardened runtime、secure timestamp、authority、entitlementsを検証します。release helper自身は`codesign --deep --force`で再署名しません。そのbundleを事前ZIPへまとめて`xcrun notarytool submit --wait`へ送り、Accepted後にticketをstaple／validateし、codesignとGatekeeperで検証してから、実際のMach-O architectureを読んで`build/release/Research-RAG-<version>-macos-<architecture>.zip`を生成します。失敗時はnotarytool resultの保存先とsubmission IDを表示し、取得できる場合はnotarization logも表示します。dry-runはbuild、署名、Keychain変更、Appleへの通信を行いません。
+実releaseではcustom iconとmetadataをbuild前にNuitkaへ渡し、NuitkaがDeveloper ID署名したappを後から変更・再署名しません。app signatureを検証後、実architecture名のDMGを作り、`io.github.atraz-yuya.research-rag.dmg`としてDeveloper ID Applicationで署名します。DMG署名に`codesign --deep`は使いません。配布対象のDMG自体を`xcrun notarytool submit --wait`へ送り、Accepted後にDMGへstapleし、stapler、codesign、hdiutil、Gatekeeperで検証します。最終staple後のDMGから`Research-RAG-<version>-macos-<architecture>.dmg.sha256`を生成します。失敗時はsubmission IDとnotarization logの確認経路を残します。dry-runはbuild、署名、Keychain変更、Apple通信を行いません。
 
-現段階ではDMG、Mac App Store、custom icon、auto update、cross-platform installer、GitHub Release自動化には対応しません。
+### GitHub Release preparation
+
+将来の配布前確認には、まずread-onlyなdry-runを使います。
+
+```bash
+./scripts/prepare_github_release.sh --dry-run
+```
+
+実行pathは、project versionと一致する既存の`v<version>` tagがlocalとremoteに存在し、意図したHEADを指すこと、DMG／checksum／architectureを検証してから、`gh release create --verify-tag --draft`でDMGとchecksumを添付します。tagを作成・pushせず、Releaseをpublishしません。実tagやdraft Releaseの作成は、このIssueの実装・検証では行っていません。手動配布時は[release checklist](docs/release_checklist.md)を上から確認してください。
+
+```bash
+./scripts/prepare_github_release.sh \
+  "build/release/Research-RAG-0.1.0-macos-arm64.dmg"
+```
+
+現段階では公開済みdownloadable release、Mac App Store、auto update、custom Finder background、cross-platform installerには対応しません。
 
 ## CLIの実行
 

@@ -23,6 +23,7 @@ RELEASE_HELPER = REPOSITORY_ROOT / "scripts" / "release_macos_app.sh"
 NUITKA_METADATA_PLUGIN = (
     REPOSITORY_ROOT / "scripts" / "nuitka_bundle_metadata_plugin.py"
 )
+GENERATED_ICON = REPOSITORY_ROOT / "build" / "generated" / "ResearchRAG.icns"
 TEST_IDENTITY = "Developer ID Application: Test Developer (TESTTEAM1)"
 
 
@@ -39,6 +40,7 @@ def _prepared_arguments(
         signing_identity=signing_identity,
         exec_directory="build/release" if signing_identity else None,
         bundle_metadata_plugin=NUITKA_METADATA_PLUGIN,
+        icon_path=GENERATED_ICON,
     )
     config = configparser.ConfigParser()
     assert config.read(destination) == [str(destination)]
@@ -73,6 +75,7 @@ def _install_fake_release_commands(
                 "CFBundleIdentifier": "io.github.atraz-yuya.research-rag",
                 "CFBundleShortVersionString": "0.1.0",
                 "CFBundleVersion": "0.1.0",
+                "CFBundleIconFile": "ResearchRAG.icns",
             },
             plist_file,
         )
@@ -85,8 +88,9 @@ def _install_fake_release_commands(
         "printf '%s %s\\n' \"$name\" \"$*\" >> \"$FAKE_COMMAND_LOG\"\n"
         "case \"$name\" in\n"
         "  pyside6-deploy)\n"
-        "    mkdir -p \"$FAKE_APP/Contents/MacOS\"\n"
+        "    mkdir -p \"$FAKE_APP/Contents/MacOS\" \"$FAKE_APP/Contents/Resources\"\n"
         "    cp \"$FAKE_INFO_PLIST\" \"$FAKE_APP/Contents/Info.plist\"\n"
+        "    cp \"$FAKE_ICON\" \"$FAKE_APP/Contents/Resources/ResearchRAG.icns\"\n"
         "    : > \"$FAKE_APP/Contents/MacOS/run_gui\"\n"
         "    chmod +x \"$FAKE_APP/Contents/MacOS/run_gui\"\n"
         "    ;;\n"
@@ -95,7 +99,13 @@ def _install_fake_release_commands(
         "    ;;\n"
         "  codesign)\n"
         "    case \" $* \" in\n"
-        f"      *' -dvvv '*) printf 'Authority={TEST_IDENTITY}\\nflags=0x10000(runtime)\\nTimestamp=Aug 10, 2026\\n' >&2 ;;\n"
+        "      *' -dvvv '*)\n"
+        "        for signed_path do :; done\n"
+        "        case \"$signed_path\" in\n"
+        f"          *.dmg) printf 'Authority={TEST_IDENTITY}\\nIdentifier=io.github.atraz-yuya.research-rag.dmg\\nTimestamp=Aug 10, 2026\\n' >&2 ;;\n"
+        f"          *) printf 'Authority={TEST_IDENTITY}\\nflags=0x10000(runtime)\\nTimestamp=Aug 10, 2026\\n' >&2 ;;\n"
+        "        esac\n"
+        "        ;;\n"
         "      *' --entitlements '*) printf '<?xml version=\"1.0\"?><plist><dict/></plist>\\n' >&2 ;;\n"
         "    esac\n"
         "    ;;\n"
@@ -105,13 +115,20 @@ def _install_fake_release_commands(
         f"      printf '{{\"id\":\"submission-123\",\"status\":\"{notary_status}\"}}\\n'\n"
         "    fi\n"
         "    ;;\n"
-        "  ditto)\n"
-        "    for output_path do :; done\n"
-        "    mkdir -p \"$(dirname \"$output_path\")\"\n"
-        "    : > \"$output_path\"\n"
+        "  ditto) cp -R \"$1\" \"$2\" ;;\n"
+        "  hdiutil)\n"
+        "    if [ \"${1:-}\" = 'create' ]; then\n"
+        "      for output_path do :; done\n"
+        "      mkdir -p \"$(dirname \"$output_path\")\"\n"
+        "      : > \"$output_path\"\n"
+        "    fi\n"
         "    ;;\n"
         "  lipo) printf 'arm64\\n' ;;\n"
         "  spctl) : ;;\n"
+        "  shasum)\n"
+        "    for input_path do :; done\n"
+        "    printf '0123456789abcdef  %s\\n' \"$(basename \"$input_path\")\"\n"
+        "    ;;\n"
         "esac\n"
     )
     fake_command_source.chmod(0o755)
@@ -123,20 +140,37 @@ def _install_fake_release_commands(
         ("codesign", "RESEARCH_RAG_CODESIGN_COMMAND"),
         ("xcrun", "RESEARCH_RAG_XCRUN_COMMAND"),
         ("ditto", "RESEARCH_RAG_DITTO_COMMAND"),
+        ("hdiutil", "RESEARCH_RAG_HDIUTIL_COMMAND"),
         ("lipo", "RESEARCH_RAG_LIPO_COMMAND"),
         ("spctl", "RESEARCH_RAG_SPCTL_COMMAND"),
+        ("shasum", "RESEARCH_RAG_SHASUM_COMMAND"),
     ):
         command_path = commands / command_name
         command_path.symlink_to(fake_command_source)
         command_paths[environment_name] = os.fspath(command_path)
 
     fake_app = Path(environment["RESEARCH_RAG_RELEASE_DIR"]) / "Research RAG.app"
+    fake_icon = tmp_path / "ResearchRAG.icns"
+    fake_icon.write_bytes(b"fake icon")
+    fake_icon_generator = tmp_path / "fake_icon_generator.py"
+    fake_icon_generator.write_text(
+        "import argparse\n"
+        "from pathlib import Path\n"
+        "parser = argparse.ArgumentParser()\n"
+        "parser.add_argument('--output', type=Path, required=True)\n"
+        "args = parser.parse_args()\n"
+        "args.output.parent.mkdir(parents=True, exist_ok=True)\n"
+        "args.output.write_bytes(b'fake icon')\n"
+    )
     environment.update(command_paths)
     environment.update(
         {
             "FAKE_COMMAND_LOG": os.fspath(command_log),
             "FAKE_INFO_PLIST": os.fspath(fake_info),
             "FAKE_APP": os.fspath(fake_app),
+            "FAKE_ICON": os.fspath(fake_icon),
+            "RESEARCH_RAG_ICON_GENERATOR": os.fspath(fake_icon_generator),
+            "RESEARCH_RAG_ICON_OUTPUT": os.fspath(fake_icon),
             "RESEARCH_RAG_DEVELOPER_ID_APPLICATION": TEST_IDENTITY,
             "RESEARCH_RAG_NOTARY_PROFILE": "test-notary-profile",
         }
@@ -156,6 +190,7 @@ def test_project_version_is_the_single_source_for_bundle_metadata(
         "--macos-signed-app-name=io.github.atraz-yuya.research-rag" in arguments
     )
     assert f"--user-plugin={NUITKA_METADATA_PLUGIN}" in arguments
+    assert config["app"]["icon"] == os.fspath(GENERATED_ICON.resolve())
 
 
 def test_changed_pyproject_version_propagates_without_python_version_constant(
@@ -291,6 +326,7 @@ def test_local_build_dry_run_injects_metadata_without_credentials(
     arguments = shlex.split(config["nuitka"]["extra_args"])
     assert "--macos-app-version=0.1.0" in arguments
     assert f"--user-plugin={NUITKA_METADATA_PLUGIN}" in arguments
+    assert config["app"]["icon"] == os.fspath(GENERATED_ICON.resolve())
     assert not any(argument.startswith("--macos-sign-identity") for argument in arguments)
 
 
@@ -349,7 +385,7 @@ def test_release_dry_run_never_uses_credentials_commands_or_network(
     assert not Path(environment["RESEARCH_RAG_RELEASE_DIR"]).exists()
 
 
-def test_release_workflow_uses_zip_notarytool_stapling_and_actual_architecture(
+def test_release_workflow_signs_submits_staples_dmg_and_checksums_last(
     tmp_path: Path,
 ) -> None:
     environment = _base_release_environment(tmp_path)
@@ -365,11 +401,15 @@ def test_release_workflow_uses_zip_notarytool_stapling_and_actual_architecture(
     )
 
     assert completed.returncode == 0, completed.stderr
-    final_zip = (
+    final_dmg = (
         Path(environment["RESEARCH_RAG_RELEASE_DIR"])
-        / "Research-RAG-0.1.0-macos-arm64.zip"
+        / "Research-RAG-0.1.0-macos-arm64.dmg"
     )
-    assert final_zip.is_file()
+    checksum = final_dmg.with_name(f"{final_dmg.name}.sha256")
+    assert final_dmg.is_file()
+    assert checksum.is_file()
+    assert final_dmg.name in checksum.read_text()
+    assert os.fspath(final_dmg.parent) not in checksum.read_text()
     release_metadata.verify_bundle_info(
         fake_app / "Contents" / "Info.plist",
         pyproject_path=PYPROJECT,
@@ -382,16 +422,22 @@ def test_release_workflow_uses_zip_notarytool_stapling_and_actual_architecture(
     staple_index = next(
         index for index, call in enumerate(calls) if "stapler staple" in call
     )
-    ditto_calls = [
-        (index, call) for index, call in enumerate(calls) if call.startswith("ditto ")
-    ]
-    assert len(ditto_calls) == 2
-    assert ditto_calls[0][0] < submit_index < staple_index < ditto_calls[1][0]
-    assert "Research-RAG-0.1.0-notarization.zip" in calls[submit_index]
-    assert "Research RAG.app --keychain-profile" not in calls[submit_index]
+    checksum_index = next(
+        index for index, call in enumerate(calls) if call.startswith("shasum ")
+    )
+    dmg_sign_call = next(
+        call
+        for call in calls
+        if call.startswith("codesign --sign ") and ".dmg" in call
+    )
+    assert "--identifier io.github.atraz-yuya.research-rag.dmg" in dmg_sign_call
+    assert "--deep" not in dmg_sign_call
+    assert "Research-RAG-0.1.0-macos-arm64.dmg" in calls[submit_index]
+    assert ".zip" not in calls[submit_index]
     assert "--wait --output-format json" in calls[submit_index]
-    assert any("stapler validate" in call for call in calls)
-    assert not any(" --sign " in call for call in calls if call.startswith("codesign "))
+    assert submit_index < staple_index < checksum_index
+    assert any("stapler validate" in call and ".dmg" in call for call in calls)
+    assert sum(call.startswith("hdiutil verify ") for call in calls) >= 3
 
 
 def test_notarization_rejection_reports_submission_id_and_fetches_log(
@@ -431,5 +477,8 @@ def test_release_helper_has_no_legacy_or_plaintext_credential_fallbacks() -> Non
     assert "codesign --deep --force" not in source
     assert "--force --deep" not in source
     assert "--deep --force" not in source
-    assert '--sign "$IDENTITY"' not in source
+    assert '--sign "$IDENTITY"' in source
+    assert '--identifier "$DMG_IDENTIFIER"' in source
+    assert "notarytool submit \"$FINAL_DMG\"" in source
+    assert ".zip" not in source
     assert "--wait --output-format json" in source
