@@ -801,3 +801,21 @@ GUI／RAG／CLI、SQLite schema v3、QStandardPaths、model defaults、retrieval
 ### 変更していないもの
 
 productionのGUI／RAG／CLI、SQLite schema v3、QStandardPaths application identity／保存先、model defaults、citation semantics、Qt worker／teardown、release workflowは変更していない。real Developer ID signing／notarization、tag、GitHub Release、publishは行っていない。
+
+## Issue 031 Phase A: Final v0.1.0 release preflight
+
+実施日: 2026-08-11
+
+### 実施内容
+
+- Phase A開始時の`main` SHA `346e6b0f578435a93dca521afb7534e90575d91b`、project version `0.1.0`、expected tag `v0.1.0`、bundle identifier、arm64 target、RC verdict `PASS WITH KNOWN LIMITATIONS`を確認した
+- read-onlyでlocal／remote tagとGitHub Releaseを調べ、`v0.1.0`が未作成であることを確認した。Developer ID identityは0件、release identity環境変数とnotary profileも未設定で、Phase Bは現時点では実行できないと記録した
+- offscreen／faulthandler付きfull pytest 442件を成功させ、worker／MainWindow focused suite 48件をfresh processで5回連続成功させた。`git diff --check`も成功した
+- safeな一時filesystemでdeterministic iconと171 MBのarm64 standalone appを実buildし、Qt runtime、bundle identifier、両version、icon metadata、strict ad-hoc署名、runtime data非同梱を確認した
+- 68 MBのcredential-free DMGを作成して`hdiutil verify`、read-only mount、appと`Applications -> /Applications`だけのlayout、安全な場所へのcopy、packaged GUI起動、bundle外QStandardPaths、clean detachを確認した。`/Applications`へは書き込んでいない
+- Ollama 0.32.6と既存default modelで合成PDFのproduction RAG smokeを行い、1024次元embedding、回答`27`、rank 1のPDF名／1始まりp.2／source textを確認した。model downloadやdefault変更は行っていない
+- GitHub Release向けの`release_notes_v0.1.0.md`と、release-state／credential／検証結果／残るauthorization gateを分離して記録する`release_readiness_v0.1.0.md`を追加した
+
+### Authorization boundary
+
+Phase Aだけを実施し、real Developer ID release build、Apple notarization、stapling、正式checksum、Git tag作成／push、GitHub Release作成／変更、asset upload、publish、`main` mergeは行っていない。実際のrelease commitはPhase A PRのreview／merge後、Phase Cの別承認前に`main`上で再確認する。

@@ -29,6 +29,8 @@ v0.1.0には会話履歴がなく、質問は毎回独立して処理されま�
 v0.1.0 release candidateは、macOS Apple Silicon arm64のpackaged GUIと実Ollamaで`PASS WITH KNOWN LIMITATIONS`です。まだ公開済みのnotarized release、Git tag、GitHub Releaseはありません。
 
 - [RC validation report](docs/release_candidate_v0.1.0.md)
+- [v0.1.0 release notes source](docs/release_notes_v0.1.0.md)
+- [v0.1.0 release readiness](docs/release_readiness_v0.1.0.md)
 - [Known limitations](docs/known_limitations.md)
 
 ## 必要なもの
@@ -277,6 +279,8 @@ repositoryにはDeveloper ID、notarytool、stapling、checksum、draft GitHub R
 - [MVP specification](docs/mvp_spec.md)
 - [Known limitations](docs/known_limitations.md)
 - [v0.1.0 RC validation](docs/release_candidate_v0.1.0.md)
+- [v0.1.0 release notes source](docs/release_notes_v0.1.0.md)
+- [v0.1.0 release readiness](docs/release_readiness_v0.1.0.md)
 - [macOS release checklist](docs/release_checklist.md)
 - [Development log](docs/development_log.md)
 
