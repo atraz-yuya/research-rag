@@ -169,6 +169,15 @@ if [ ! -f "$EXPECTED_ICON_RESOURCE" ]; then
     exit 1
 fi
 
+QT_CORE_RUNTIME=$(find "$EXPECTED_APP/Contents" -type f \
+    -name QtCore -print -quit)
+COCOA_PLATFORM_PLUGIN=$(find "$EXPECTED_APP/Contents" -type f \
+    -name libqcocoa.dylib -print -quit)
+if [ -z "$QT_CORE_RUNTIME" ] || [ -z "$COCOA_PLATFORM_PLUGIN" ]; then
+    echo "Error: pyside6-deploy created an incomplete bundle without the required Qt runtime." >&2
+    exit 1
+fi
+
 "$PYTHON_COMMAND" "$SCRIPT_DIR/release_metadata.py" \
     --pyproject "$REPOSITORY_ROOT/pyproject.toml" verify-bundle \
     --info-plist "$EXPECTED_APP/Contents/Info.plist"

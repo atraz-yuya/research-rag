@@ -758,3 +758,28 @@ GUI、RAG pipeline、CLI、corpus SQLite schema v3、QStandardPaths、QtTaskRunn
 ### 互換性と今回の対象外
 
 GUI／RAG／CLI、corpus SQLite schema v3、QStandardPaths、model defaults、citation semantics、QtTaskRunner／teardown、Issue 027のNuitka Developer ID app-signing設計は変更していない。Mac App Store、auto update、custom DMG background、real tag／public GitHub Releaseは追加していない。
+
+## Issue 029: Validate the v0.1.0 release candidate end to end
+
+実施日: 2026-08-11
+
+### 実施内容
+
+- macOS 26.5.2 arm64、Python 3.11.15、PySide6／Qt 6.11.1、Nuitka 4.1.3、Ollama 0.32.6でv0.1.0 RCを検証した。defaultの`qwen3-embedding:0.6b`と`qwen3:4b-instruct`を使い、version endpoint、1024次元embedding、`think: false` generationが成功した
+- private資料を使わず、PyMuPDFで一時生成した3ページ以上のtext-based PDF 2冊を実際のPDF extractionからproduction chunking／embedding／retrieval／generationへ通した。PDF A、PDF B、両資料を区別する3質問で、回答、PDF名、1始まりpage、rank、score、source textを照合した
+- SQLite store／service再生成後もcorpusと文書が残り、質問embedding 1回だけで回答でき、document embeddingを再実行しないことを記録した
+- PDF Aだけを変更して`MODIFIED`→対象だけreindex→`CURRENT`を確認し、同じdocument IDを維持した。PDF BのChunk／embeddingは変わらず、変更factをAの新しいpageから回答した
+- PDF Bを一時的に移動して`MISSING`を確認し、保存済みcontentへの質問と他文書の利用を継続できた。sourceは元へ戻した
+- Ollamaを到達不能endpointへ切り替えたfailureと設定復元後の成功、invalid PDF追加のatomic failureと直後の正常質問、空質問のpreflight rejectionとnetwork call 0件を確認した
+- official `pyside6-deploy`で約171 MBのarm64 standalone appを生成し、bundle identifier、両version、ICNS、Qt runtime、strict ad-hoc signatureを確認した。約68 MBのcredential-free DMGをverify／mountし、appと`Applications -> /Applications`だけを確認して安全な一時領域へcopy／detachした
+- copied packaged appはsource tree／venv／`PYTHONPATH`なしで通常起動とoffscreen起動に成功し、schema v3のAppData corpusをbundle外に維持した。到達不能Ollama URLでも起動できた
+- FileProvider属性によりNuitkaの内部codesignが失敗した際、`pyside6-deploy`がexit 0とpartial bundleを残す事象をRC blockerとして再現した。local／release helperへQtCoreとCocoa platform pluginの必須検証を追加し、不完全bundleを明示的に失敗させるregression testを追加した
+- `QT_QPA_PLATFORM=offscreen python -X faulthandler -m pytest`で全442件を成功させ、worker／MainWindow focused suite 48件をfaulthandler付きfresh processで5回連続成功させた。`git diff --check`、local build／release／GitHub Release preparationの各dry-runも成功した
+
+### RC判定
+
+初回記録後、ユーザー本人がDMGから通常directoryへコピーしたpackaged GUIを操作し、2 PDF corpus作成と両文書の`最新`表示、PDF A／B／明示的cross-PDF質問とcitation、再起動後の永続利用、PDF Aだけの`変更あり`→reindex→`最新`、PDF Bの`ファイルなし`と復旧、到達不能Ollamaのerror／UI復帰／再接続、invalid PDF、空質問を確認した。
+
+曖昧なcross-PDF比較質問ではTop 3がPDF Bだけとなり誤答した一方、対象を明示した質問ではPDF A／Bの両方がTop 3に入った。これはdense retrievalと既定`Top-K=3`の既知制限として記録し、retrieval設定は変更していない。packaged GUIの主要completion criteriaが手動でも満たされたため、最終verdictを`PASS WITH KNOWN LIMITATIONS`へ更新した。詳細は`docs/release_candidate_v0.1.0.md`へ記録した。
+
+GUI／RAG／CLI、SQLite schema v3、QStandardPaths、model defaults、retrieval／citation semanticsは変更していない。Developer ID identityとnotary profileがないためreal signing／notarization／stapling／Gatekeeper release assessmentは未実施で、real tag／GitHub Release／publishも行っていない。

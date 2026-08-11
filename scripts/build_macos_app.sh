@@ -7,9 +7,12 @@ REPOSITORY_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 SYSTEM_NAME=${RESEARCH_RAG_BUILD_SYSTEM_NAME:-$(uname -s)}
 DEPLOY_COMMAND=${PYSIDE6_DEPLOY:-pyside6-deploy}
 PYTHON_COMMAND=${RESEARCH_RAG_PYTHON:-python}
+XATTR_COMMAND=${RESEARCH_RAG_XATTR_COMMAND:-/usr/bin/xattr}
+CODESIGN_COMMAND=${RESEARCH_RAG_CODESIGN_COMMAND:-/usr/bin/codesign}
 ICON_GENERATOR=${RESEARCH_RAG_ICON_GENERATOR:-$REPOSITORY_ROOT/scripts/generate_app_icon.py}
 ICON_OUTPUT=${RESEARCH_RAG_ICON_OUTPUT:-$REPOSITORY_ROOT/build/generated/ResearchRAG.icns}
-EXPECTED_APP="$REPOSITORY_ROOT/build/deploy/Research RAG.app"
+BUILD_DIRECTORY=${RESEARCH_RAG_BUILD_DIRECTORY:-$REPOSITORY_ROOT/build/deploy}
+EXPECTED_APP="$BUILD_DIRECTORY/Research RAG.app"
 EXPECTED_EXECUTABLE="$EXPECTED_APP/Contents/MacOS/run_gui"
 EXPECTED_ICON_RESOURCE="$EXPECTED_APP/Contents/Resources/ResearchRAG.icns"
 DRY_RUN=false
@@ -40,7 +43,7 @@ if ! command -v "$PYTHON_COMMAND" >/dev/null 2>&1; then
 fi
 
 cd "$REPOSITORY_ROOT"
-mkdir -p build/deploy
+mkdir -p "$BUILD_DIRECTORY"
 
 if [ "$DRY_RUN" = true ]; then
     "$PYTHON_COMMAND" "$ICON_GENERATOR" --output "$ICON_OUTPUT" --dry-run
@@ -69,6 +72,7 @@ cp "$REPOSITORY_ROOT/pysidedeploy.spec" "$BUILD_SPEC"
     --pyproject "$REPOSITORY_ROOT/pyproject.toml" prepare-spec \
     --source "$REPOSITORY_ROOT/pysidedeploy.spec" \
     --destination "$BUILD_SPEC" \
+    --exec-directory "$BUILD_DIRECTORY" \
     --bundle-metadata-plugin \
         "$REPOSITORY_ROOT/scripts/nuitka_bundle_metadata_plugin.py" \
     --icon "$ICON_OUTPUT"
@@ -104,6 +108,15 @@ if [ ! -f "$EXPECTED_ICON_RESOURCE" ]; then
     exit 1
 fi
 
+QT_CORE_RUNTIME=$(find "$EXPECTED_APP/Contents" -type f \
+    -name QtCore -print -quit)
+COCOA_PLATFORM_PLUGIN=$(find "$EXPECTED_APP/Contents" -type f \
+    -name libqcocoa.dylib -print -quit)
+if [ -z "$QT_CORE_RUNTIME" ] || [ -z "$COCOA_PLATFORM_PLUGIN" ]; then
+    echo "Error: pyside6-deploy created an incomplete bundle without the required Qt runtime." >&2
+    exit 1
+fi
+
 "$PYTHON_COMMAND" "$REPOSITORY_ROOT/scripts/release_metadata.py" \
     --pyproject "$REPOSITORY_ROOT/pyproject.toml" verify-bundle \
     --info-plist "$EXPECTED_APP/Contents/Info.plist"
@@ -111,9 +124,9 @@ fi
 # macOS code signing rejects Finder/resource-fork extended attributes. Clear
 # them immediately before the mandatory local ad-hoc signature, then validate
 # the complete bundle rather than trusting pyside6-deploy's exit status alone.
-if ! (/usr/bin/xattr -cr "$EXPECTED_APP" && \
-    /usr/bin/codesign --force --deep --sign - "$EXPECTED_APP" && \
-    /usr/bin/codesign --verify --deep --strict "$EXPECTED_APP"); then
+if ! ("$XATTR_COMMAND" -cr "$EXPECTED_APP" && \
+    "$CODESIGN_COMMAND" --force --deep --sign - "$EXPECTED_APP" && \
+    "$CODESIGN_COMMAND" --verify --deep --strict "$EXPECTED_APP"); then
     echo "Error: unable to ad-hoc sign and validate the generated application." >&2
     exit 1
 fi
