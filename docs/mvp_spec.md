@@ -142,7 +142,7 @@ bundleへcorpus DBの`indexes.sqlite3`、GUI設定の`settings.ini`、source PDF
 
 ## v0.1.0 Release Candidate validation
 
-Issue 029では、arm64 standalone appとcredential-free DMGの生成、metadata／icon／署名／mount、bundle外AppData、実Ollamaを使う2-PDF production RAG lifecycle、永続reload、文書単位reindex、missing source、Ollama failure recovery、invalid PDF、empty questionを検証した。packaged appはsource treeやvenvなしで起動したが、実行環境のmacOS Accessibility制約によりpackaged GUIの対話的E2Eは完了していない。そのためRC verdictはFAIL（validation incomplete）とし、未実施項目をPASSとして扱わない。詳細は[`release_candidate_v0.1.0.md`](release_candidate_v0.1.0.md)を参照する。
+Issue 029では、arm64 standalone appとcredential-free DMGの生成、metadata／icon／署名／mount、bundle外AppData、実Ollamaを使う2-PDF production RAG lifecycle、永続reload、文書単位reindex、missing source、Ollama failure recovery、invalid PDF、empty questionを検証した。さらにユーザー本人がDMGからコピーしたpackaged GUIで同じ主要シナリオを対話確認した。曖昧な複数PDF比較質問ではdense retrievalと既定`Top-K=3`により片方のPDFがretrieval結果から落ちる場合があるため、RC verdictは`PASS WITH KNOWN LIMITATIONS`とした。詳細は[`release_candidate_v0.1.0.md`](release_candidate_v0.1.0.md)を参照する。
 
 ## 後続Issueで決定する事項
 

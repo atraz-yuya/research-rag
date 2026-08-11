@@ -778,6 +778,8 @@ GUI／RAG／CLI、corpus SQLite schema v3、QStandardPaths、model defaults、ci
 
 ### RC判定
 
-packaged appの起動、DMG、実Ollama production lifecycleは成功したが、macOS Accessibility権限がなくpackaged GUIの対話操作を自動化できなかった。未実施のGUI happy pathとfailure UXをPASSとせず、verdictは`FAIL (validation incomplete)`とした。別の対話可能なmacOS sessionでcorpus作成から質問、restart、reindex、failure recoveryをpackaged GUI上で完了する必要がある。詳細は`docs/release_candidate_v0.1.0.md`へ記録した。
+初回記録後、ユーザー本人がDMGから通常directoryへコピーしたpackaged GUIを操作し、2 PDF corpus作成と両文書の`最新`表示、PDF A／B／明示的cross-PDF質問とcitation、再起動後の永続利用、PDF Aだけの`変更あり`→reindex→`最新`、PDF Bの`ファイルなし`と復旧、到達不能Ollamaのerror／UI復帰／再接続、invalid PDF、空質問を確認した。
+
+曖昧なcross-PDF比較質問ではTop 3がPDF Bだけとなり誤答した一方、対象を明示した質問ではPDF A／Bの両方がTop 3に入った。これはdense retrievalと既定`Top-K=3`の既知制限として記録し、retrieval設定は変更していない。packaged GUIの主要completion criteriaが手動でも満たされたため、最終verdictを`PASS WITH KNOWN LIMITATIONS`へ更新した。詳細は`docs/release_candidate_v0.1.0.md`へ記録した。
 
 GUI／RAG／CLI、SQLite schema v3、QStandardPaths、model defaults、retrieval／citation semanticsは変更していない。Developer ID identityとnotary profileがないためreal signing／notarization／stapling／Gatekeeper release assessmentは未実施で、real tag／GitHub Release／publishも行っていない。

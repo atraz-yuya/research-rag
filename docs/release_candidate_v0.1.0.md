@@ -6,9 +6,9 @@
 
 ## 判定
 
-**RC verdict: FAIL（packaged GUIの対話的E2E validation未完了）**
+**RC verdict: PASS WITH KNOWN LIMITATIONS**
 
-完全なstandalone `.app`、credential-free DMG、実Ollamaを使うproduction RAGライフサイクルは確認できた。一方、このCodex実行環境ではmacOS Accessibility権限がなく、DMGからコピーしたpackaged GUIのボタン操作を自動化できなかった。そのため、packaged app上でのcorpus作成から質問までを実際にクリック操作したとは扱わず、Issue 029のcompletion criteriaを満たしたPASSとは判定しない。
+完全なstandalone `.app`、credential-free DMG、実Ollamaを使うproduction RAGライフサイクルに加え、ユーザー本人がDMGからコピーしたpackaged GUIを対話操作し、corpus作成、2 PDFのindexingと質問、再起動、文書変更とreindex、missing source、Ollama failure recovery、invalid PDF、空質問まで確認した。曖昧な複数PDF比較質問では、dense retrievalと既定`Top-K=3`により片方のPDFが検索結果から落ちる場合があるため、既知の制限を伴うPASSとする。
 
 ## Environment
 
@@ -50,7 +50,7 @@ appにはQtCore、Cocoa platform plugin、423 KBのICNSが含まれ、`codesign 
 
 コピーしたpackaged appは、source tree、venv、`PYTHONPATH`なしで通常起動と`QT_QPA_PLATFORM=offscreen`起動の両方に成功し、GUI event loopで稼働し続けた。既存AppDataには1 corpus／2 documentsがschema v3で残り、app bundle内に`indexes.sqlite3`、`settings.ini`、PDFは存在しない。到達不能なOllama URLを一時設定した状態でも起動し、設定を検証後に元の「settingsなし」の状態へ戻した。
 
-ただしAccessibility権限不足のためpackaged GUIのwidget操作は実行できなかった。以下のRAG、永続化、変更検出、失敗回復は、packaged appと同じproduction service／SQLite schema／AppData lifecycleを実Ollamaへ接続して確認したものであり、packaged GUIのクリック操作結果ではない。
+Codexによる初回検証ではAccessibility権限不足のためwidget操作を自動化できなかった。その後、ユーザー本人が同じrelease-like packaged GUIを通常のmacOS sessionで対話操作し、以下の主要シナリオを完了した。production serviceのinstrumentation結果と手動GUI結果を併せて記録する。
 
 ## Test PDFs
 
@@ -58,6 +58,8 @@ PyMuPDFで一時領域へ生成した、OCRを必要としない複数ページ�
 
 - PDF A: `asteria_coastal_observatory.pdf`、沿岸eelgrass restorationの観測方法と結果。変更試験前は3ページ、変更後は4ページ
 - PDF B: `boralis_library_energy.pdf`、公共図書館のenergy retrofit設備と測定結果、3ページ
+
+packaged GUIの手動確認では、同じ識別可能なfactを含む`RC-Test-A.pdf`と`RC-Test-B.pdf`を同一資料セットへ追加した。両文書が`最新`になるまで処理が完了し、以下のcitationを実際のpage textと照合した。
 
 ## Questions and citations
 
@@ -86,6 +88,14 @@ PyMuPDFで一時領域へ生成した、OCRを必要としない複数ページ�
 
 探索中の別質問`Compare the percentage outcomes reported by the two documents.`では、既定Top-K 3にAsteria page 3が入らず一方の数値を回答できなかった。これは状態破損ではなく、現在のdense retrieval／Top-Kの既知の品質限界として扱い、retrieval設定は変更していない。
 
+### Packaged GUI manual confirmation
+
+- PDF A質問: `underwater light availability`を回答し、top citationは`RC-Test-A.pdf` page 1だった
+- PDF B質問: `41 percent`を回答し、top citationは`RC-Test-B.pdf` page 3だった
+- 曖昧なcross-PDF比較質問: Top 3がPDF Bだけとなり誤答した。片方のPDFがcandidateから落ちる既知制限として記録する
+- 資料名と期待範囲を明示したcross-PDF質問: PDF A／Bの両方がTop 3へ入り、両資料を正しく区別した
+- source表示のPDF名、1始まりpage、rank、score、本文を確認し、成功した各質問の主要citationが実際の根拠textと一致した
+
 ## Restart and persistence
 
 storeとserviceを作り直して同じindexをloadした。
@@ -94,6 +104,7 @@ storeとserviceを作り直して同じindexをloadした。
 - source PDFの再追加は不要だった
 - `How many fixed monitoring stations were used?`へ`Twelve`と回答し、Asteria page 2をrank 1（score 0.678676）で引用した
 - 記録されたembedding callは質問1件だけで、document extraction／chunking／document embeddingは再実行されなかった
+- packaged GUIでも通常終了後に再起動し、corpus／documentsが残り、再追加なしで`12`と回答して`RC-Test-A.pdf` page 2をtop citationにした
 
 ## Modified document and reindex
 
@@ -105,6 +116,7 @@ PDF Aだけへ4ページ目のfactを追加した。
 - PDF BのChunk／embeddingはbyte-for-byte相当で維持された
 - document embedding callはPDF Aの4 chunksだけで、PDF B本文は含まれなかった
 - `How many juvenile seahorses were counted in the 2025 follow-up?`へ`94`と回答し、Asteria page 4をrank 1（score 0.799951）で引用した
+- packaged GUIでもPDF A=`変更あり`／PDF B=`最新`からPDF Aだけをreindexし、両方=`最新`へ戻った。変更後factは`94`と回答し、`RC-Test-A.pdf` page 4をtop citationにした
 
 ## Missing source
 
@@ -114,12 +126,13 @@ PDF Aだけへ4ページ目のfactを追加した。
 - corpusと他文書は利用可能なままだった
 - 保存済みPDF B内容への質問は引き続き`41 percent`と回答し、Boralis page 3をrank 1（score 0.817925）で引用した
 - source fileを元のpathへ戻した
+- packaged GUIでもPDF B=`ファイルなし`／PDF A=`最新`を表示し、MISSINGのまま保存済みindexから`41 percent`と回答して`RC-Test-B.pdf` page 3を引用した。PDF Bを元pathへ戻すと`最新`へ復旧した
 
 ## Ollama unavailable and recovery
 
 live serviceの接続先を一時的に`http://127.0.0.1:1`へ変更した質問は、`OllamaError`とconnection refusedで失敗した。以前のcorpusを変更せず、元のclient／settingsへ戻した次の質問は成功し、Asteria page 1を引用した。
 
-packaged app自体も同じ到達不能URLを保存した状態でOllamaへ接続せず起動できた。GUIのprogress解除、controls復帰、以前のanswer表示保持は既存mock GUI regression testでは確認済みだが、今回のpackaged GUIではAccessibility制約により対話確認していない。
+packaged app自体も同じ到達不能URLを保存した状態でOllamaへ接続せず起動できた。手動GUI確認では`http://127.0.0.1:1`への質問で明示的なconnection refused dialogを表示し、app継続、progress終了、controls復帰、corpus／document／question状態維持を確認した。`http://localhost:11434`へ戻した次の質問は成功し、`underwater light availability`へ`RC-Test-A.pdf` page 1を引用した。
 
 ## Invalid PDF and empty question
 
@@ -127,7 +140,8 @@ packaged app自体も同じ到達不能URLを保存した状態でOllamaへ接�
 - corpus metadataは前後で一致し、部分documentは保存されなかった
 - 直後の有効な質問は成功し、Boralis page 3を正しく引用した
 - whitespace-only questionは`question must not be empty`で拒否され、embedding／generation callは0件だった
-- packaged GUI上のdialogと入力保持は今回の対話確認対象外である
+- packaged GUIでもinvalid PDFに`Failed to open PDF file: .../invalid.pdf`を表示し、crashせず既存stateを維持した
+- packaged GUIのwhitespace-only questionは`質問を入力してください。`と警告し、不要なRAG処理を開始しない既存実装と一致した
 
 ## Release blocker fixed
 
@@ -140,10 +154,9 @@ local／release helperに、`QtCore`と`libqcocoa.dylib`の存在を必須とす
 - scanned-image PDFのOCRはv0.1.0の対象外
 - embedding／generationにはOllamaと指定modelがローカルに必要
 - 初回indexingはPDF量とlocal model速度に応じて時間がかかる
-- dense retrievalはscopeや複数factの質問で必要なevidenceをTop-Kへ入れない場合がある
+- 曖昧な複数PDF比較質問では、dense retrievalと既定`Top-K=3`により片方のPDFがretrieval結果から落ち、誤答する場合がある。資料名や対象範囲を明示した比較質問では両PDFがTop 3へ入り成功した
 - experimental rerankingはlatencyのためproductionへ有効化していない
 - Developer ID Application identityとnotary profileがなかったため、real Developer ID signing、DMG notarization、stapling、Gatekeeper release assessmentは未実施
-- Accessibility権限がなかったため、packaged GUIの対話的E2Eは未実施。最終RC acceptanceには別の対話可能なmacOS sessionで同じ手順を完了する必要がある
 
 real tag、GitHub Release、publishは行っていない。
 
