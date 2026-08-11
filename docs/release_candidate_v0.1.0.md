@@ -151,6 +151,8 @@ local／release helperに、`QtCore`と`libqcocoa.dylib`の存在を必須とす
 
 ## Known limitations
 
+v0.1.0の制限一覧は[`known_limitations.md`](known_limitations.md)を正とする。このRCで特に観察した事項は次のとおり。
+
 - scanned-image PDFのOCRはv0.1.0の対象外
 - embedding／generationにはOllamaと指定modelがローカルに必要
 - 初回indexingはPDF量とlocal model速度に応じて時間がかかる

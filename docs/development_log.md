@@ -783,3 +783,21 @@ GUI／RAG／CLI、corpus SQLite schema v3、QStandardPaths、model defaults、ci
 曖昧なcross-PDF比較質問ではTop 3がPDF Bだけとなり誤答した一方、対象を明示した質問ではPDF A／Bの両方がTop 3に入った。これはdense retrievalと既定`Top-K=3`の既知制限として記録し、retrieval設定は変更していない。packaged GUIの主要completion criteriaが手動でも満たされたため、最終verdictを`PASS WITH KNOWN LIMITATIONS`へ更新した。詳細は`docs/release_candidate_v0.1.0.md`へ記録した。
 
 GUI／RAG／CLI、SQLite schema v3、QStandardPaths、model defaults、retrieval／citation semanticsは変更していない。Developer ID identityとnotary profileがないためreal signing／notarization／stapling／Gatekeeper release assessmentは未実施で、real tag／GitHub Release／publishも行っていない。
+
+## Issue 030: Add first-user onboarding and release documentation
+
+実施日: 2026-08-11
+
+### 実施内容
+
+- `AGENTS.md`の単一PDF CLI milestoneを、macOSデスクトップv0.1.0のonboarding／release readiness段階へ更新した。GUI／RAG／SQLite schema v3が実装済みであること、QStandardPaths identityを維持すること、明示許可なしにtag／Release／publishしないこと、generated artifactをcommitしないことを記録した
+- READMEを初回ユーザーの導線に合わせ、製品概要、現在のstatus、macOS DMG導入、Ollamaと既定model準備、最初の資料セットと質問、citation、文書状態、settings、troubleshooting、開発、packagingの順へ再構成した
+- `docs/known_limitations.md`を追加し、OCR未対応、Ollama／model要件、初回indexing時間、会話履歴なし、dense retrieval／Top-K 3の複数資料比較制限、experimental reranking、arm64 validation範囲、未実施のDeveloper ID／notarization、auto-update／Mac App Store対象外を集約した
+- project overview、MVP仕様、RC reportを現在の複数PDF GUI／永続化／release readiness段階とknown limitations文書へ接続した
+- portfolio向けに、page-aware PDF pipeline、citation、SQLite、fingerprint lifecycle、PySide6、Ollama、macOS packaging、automated／RC validationの範囲を簡潔に記録した
+- 新しいAccessibility／screen-recording permissionを要求せず、private PDFやprivate pathを含まないscreenshotは手動captureが可能になるまで保留した。画像を捏造せず、READMEはtextだけで完結するようにした
+- Markdownのlocal linkがすべて存在することと、記載したmodel／Top-K／Ollama URL／AppData identity／schema versionを実装と照合した。offscreen／faulthandler付きfull pytest 442件と`git diff --check`が成功した
+
+### 変更していないもの
+
+productionのGUI／RAG／CLI、SQLite schema v3、QStandardPaths application identity／保存先、model defaults、citation semantics、Qt worker／teardown、release workflowは変更していない。real Developer ID signing／notarization、tag、GitHub Release、publishは行っていない。
