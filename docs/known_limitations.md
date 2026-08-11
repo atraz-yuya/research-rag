@@ -30,8 +30,9 @@
 ## Desktop distribution
 
 - 実機検証済みのpackaged app／DMGはmacOS Apple Silicon arm64である。Intelまたはuniversal2 buildは検証していない
-- real Developer ID signing、notarization、stapling、Gatekeeper release assessmentはcredentialがないため未実施である
-- 公開済みのnotarized v0.1.0 releaseはまだ存在しない
+- v0.1.0の完成地点は、自分のMacで使うad-hoc signed／non-notarizedなlocal app／DMGである。public distribution用のGatekeeper-friendly artifactではない
+- Apple Developer Programには現時点で加入せず、real Developer ID signing、notarization、stapling、Gatekeeper release assessmentは行わない
+- Git tag、GitHub Release、publishを行わず、public distributionはApple Developer Programへ加入するまでdeferredである
 - Mac App Store、auto-update、cross-platform installerはv0.1.0の対象外である
 
 ## Persistence boundaries

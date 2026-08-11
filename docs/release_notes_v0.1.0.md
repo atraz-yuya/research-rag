@@ -1,6 +1,6 @@
-# Research RAG v0.1.0
+# Research RAG v0.1.0 Local-use Completion Notes
 
-> この文書は将来のGitHub Release用release notes sourceです。v0.1.0はまだ公開されておらず、Developer ID署名／notarizationも完了していません。
+> v0.1.0は、自分のMacで使うcredential-freeなlocal applicationとして完成しました。artifactはad-hoc署名済み、non-notarizedで、公開配布用ではありません。
 
 Research RAGは、研究資料のPDFへ質問し、ローカルLLMの回答と根拠を一緒に確認するmacOSデスクトップアプリケーションです。複数のPDFを名前付き資料セットとして保存し、PDFを横断して関連箇所を検索できます。
 
@@ -29,7 +29,7 @@ Research RAGはOllama本体、model、PDFをappへ同梱しません。
 
 ## インストールと最初の質問
 
-公開用DMGが正式に用意された後は、architectureに合うDMGを開き、`Research RAG.app`を`Applications` shortcutへdragします。Ollamaを起動してからappを開き、`新しい資料セット`でPDFを選び、質問を入力します。
+local helperで作成したarchitectureに合うDMGを開き、`Research RAG.app`を`Applications` shortcutへdragします。Ollamaを起動してからappを開き、`新しい資料セット`でPDFを選び、質問を入力します。この手順は、自分のMacで作成・利用するad-hoc signed／non-notarized artifactを対象とします。
 
 各回答の下に表示されるcitationで、PDF名、ページ番号、score、source textを確認してください。scoreは正しさの確率ではありません。回答は必ず正しいとは限らないため、重要な判断では必ずcitationを元PDFと照合してください。
 
@@ -44,6 +44,6 @@ Research RAGはOllama本体、model、PDFをappへ同梱しません。
 
 詳細と回避策は[Known Limitations](known_limitations.md)、使い方は[README](../README.md)を参照してください。
 
-## Release status
+## Distribution status
 
-この文書の作成時点では、real Developer ID signing、notarization、stapling、release用Gatekeeper assessment、Git tag、GitHub Release、asset upload、publishは未実施です。credential-freeなad-hoc署名artifactはrelease readiness検証専用であり、公開用notarized artifactではありません。
+v0.1.0のlocal-use goalは達成済みです。Phase Aで検証したcredential-free `.app`／DMGを現在の完成地点とし、real Developer ID signing、notarization、stapling、release用Gatekeeper assessment、Git tag、GitHub Release、asset upload、publishは行いません。public distributionはApple Developer Programへ加入するまでdeferredです。
