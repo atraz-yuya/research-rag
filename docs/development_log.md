@@ -819,3 +819,13 @@ productionのGUI／RAG／CLI、SQLite schema v3、QStandardPaths application ide
 ### Authorization boundary
 
 Phase Aだけを実施し、real Developer ID release build、Apple notarization、stapling、正式checksum、Git tag作成／push、GitHub Release作成／変更、asset upload、publish、`main` mergeは行っていない。実際のrelease commitはPhase A PRのreview／merge後、Phase Cの別承認前に`main`上で再確認する。
+
+## Issue 031: v0.1.0 local-use completion policy
+
+実施日: 2026-08-11
+
+- プロジェクトのv0.1.0 goalをpublic notarized releaseから、自分のMacで利用するlocal applicationへ変更した
+- Phase Aで検証済みのcredential-free `.app`／DMGを完成地点とし、artifactがad-hoc signed／non-notarizedであることを明記した
+- v0.1.0のlocal-use goalを達成済みと判断し、public distributionはApple Developer Programへ加入するまでdeferredとした
+- Developer ID signing、notarization、Git tag、GitHub Release、asset upload、publishを現在のgoalから除外し、実行していない
+- production code、RAG／GUI／CLI、SQLite schema v3、QStandardPaths、model defaults、citation semantics、packaging helperは変更していない

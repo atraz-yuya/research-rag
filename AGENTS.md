@@ -6,9 +6,9 @@
 
 ## 現在のマイルストーン
 
-現在は、macOSデスクトップ版v0.1.0のrelease readiness段階にある。初回ユーザー向けonboarding、release documentation、最終release準備を進める。
+macOSデスクトップ版v0.1.0は、ad-hoc signed／non-notarized artifactを自分のMacで利用するlocal-use goalを達成済みである。public distributionはApple Developer Programへ加入するまでdeferredとする。
 
-複数PDF対応のGUI／RAG、SQLite永続化schema v3、文書変更検出は実装済みである。`QStandardPaths.AppDataLocation`に使うapplication identityと保存先は互換性のため維持する。real tag、GitHub Release、Developer ID署名、notarization、publishは、明示的な許可なしに実行しない。生成した`.app`、DMG、iconset、PDF、DBなどのbuild／validation artifactはcommitしない。
+複数PDF対応のGUI／RAG、SQLite永続化schema v3、文書変更検出は実装済みである。`QStandardPaths.AppDataLocation`に使うapplication identityと保存先は互換性のため維持する。現在の方針ではreal tag、GitHub Release、Developer ID署名、notarization、publishを実行しない。将来方針を変更する場合も、新しい明示的な許可なしに実行しない。生成した`.app`、DMG、iconset、PDF、DBなどのbuild／validation artifactはcommitしない。
 
 ## コーディング規則
 

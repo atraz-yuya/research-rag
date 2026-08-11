@@ -14,4 +14,4 @@
 
 ## 現在のMVPの位置付け
 
-CLI版MVPに加え、PySide6 GUI、複数PDFの横断検索、SQLite schema v3による永続資料セット、文書変更検出、macOS packagingまで実装済みである。v0.1.0 release candidateは`PASS WITH KNOWN LIMITATIONS`で、現在は初回ユーザー向けdocumentationと最終release準備の段階にある。Ollamaは別途必要で、OCRや会話履歴はv0.1.0の対象外である。
+CLI版MVPに加え、PySide6 GUI、複数PDFの横断検索、SQLite schema v3による永続資料セット、文書変更検出、macOS packagingまで実装済みである。v0.1.0は`PASS WITH KNOWN LIMITATIONS`として、ad-hoc signed／non-notarized artifactを自分のMacで利用するlocal-use goalを達成した。public distributionはApple Developer Programへ加入するまでdeferredである。Ollamaは別途必要で、OCRや会話履歴はv0.1.0の対象外である。

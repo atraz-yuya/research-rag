@@ -1,8 +1,8 @@
-# v0.1.0 Release Readiness — Phase A
+# v0.1.0 Local-use Readiness
 
 確認日: 2026-08-11
 
-この文書はIssue 031 Phase Aのrelease-state安全確認と、credential-freeな最終preflightの証拠を記録する。製品機能の詳細なE2E結果は[RC validation report](release_candidate_v0.1.0.md)を参照する。
+この文書はIssue 031 Phase Aのrelease-state安全確認と、credential-freeな最終preflightの証拠を記録する。2026-08-11の方針変更により、このpreflightで検証したad-hoc signed／non-notarized `.app`／DMGをv0.1.0のlocal-use完成地点とする。製品機能の詳細なE2E結果は[RC validation report](release_candidate_v0.1.0.md)を参照する。
 
 ## Source and release state
 
@@ -11,12 +11,12 @@
 | Phase A開始時の`main` | `346e6b0f578435a93dca521afb7534e90575d91b` |
 | source candidate | `346e6b0f578435a93dca521afb7534e90575d91b`（Issue 030のmerge commit） |
 | project version | `0.1.0` (`pyproject.toml`) |
-| expected tag | `v0.1.0` |
+| tag policy | 現在のlocal-use goalでは作成しない |
 | bundle identifier | `io.github.atraz-yuya.research-rag` |
 | validated architecture | Apple Silicon `arm64` |
 | RC verdict | `PASS WITH KNOWN LIMITATIONS` |
 
-Phase Aではtracked release notes／readiness recordを追加するため、上記SHAはpreflightを開始したsource baselineである。実際にtagを付ける最終release commitは、このPhase A draft PRのreview／merge後に`main`上で改めて明示的に固定し、Phase Cの別承認前に再確認する必要がある。
+Phase Aではtracked completion notes／readiness recordを追加した。現在のlocal-use goalではrelease commitの固定、tag作成、GitHub Release作成を行わない。
 
 read-only確認では、local tag、remote tag、GitHub Releaseのいずれにも`v0.1.0`は存在しなかった。既存tag／Releaseの削除、移動、上書き、再作成は行っていない。
 
@@ -27,9 +27,9 @@ read-only確認では、local tag、remote tag、GitHub Releaseのいずれに�
 | Developer ID | **NOT AVAILABLE** (`security find-identity -v -p codesigning`: 0 valid identities) |
 | Notary profile | **NOT CONFIGURED** (`RESEARCH_RAG_NOTARY_PROFILE`未設定) |
 | Release identity configuration | `RESEARCH_RAG_DEVELOPER_ID_APPLICATION`未設定 |
-| Phase B | **NOT CURRENTLY POSSIBLE** |
+| Phase B | **DEFERRED / OUT OF CURRENT GOAL** |
 
-この確認ではsecretを表示せず、certificate export、Keychain変更、Appleへの通信を行っていない。profile名が将来設定されても、Appleが受理することの確認はPhase Bに属する。
+この確認ではsecretを表示せず、certificate export、Keychain変更、Appleへの通信を行っていない。Developer ID identity／notary profileがないことは、ad-hoc signed／non-notarized artifactを自分のMacで使う現在のgoalに対するblockerではない。
 
 ## Automated validation
 
@@ -62,7 +62,7 @@ FileProvider／xattrの影響を避けるため、tracked `main` sourceを通常
 - runtime DB／settingsの解決先はapp bundle外のQStandardPaths application data locationで、bundle内には生成されない
 - `/Applications`へ書き込まず、DMGをclean detach
 
-credential-free smoke DMGのSHA-256は`e7e7e2bdd5dee2fc6a8a1531dfedc3e47887e76145fe2f5ad9b255b49acee019`だった。これは一時preflight artifactの識別用であり、Developer ID署名／notarization／stapling後に作る正式release checksumではない。
+credential-free smoke DMGのSHA-256は`e7e7e2bdd5dee2fc6a8a1531dfedc3e47887e76145fe2f5ad9b255b49acee019`だった。これは一時preflight artifactの識別用であり、public release assetのchecksumではない。
 
 ## Real Ollama smoke
 
@@ -78,16 +78,14 @@ credential-free smoke DMGのSHA-256は`e7e7e2bdd5dee2fc6a8a1531dfedc3e47887e7614
 
 modelのdownloadやdefault変更は行っていない。
 
-## Readiness decision and remaining gates
+## Local-use completion decision
 
-Phase Aのsource、test、credential-free app／DMG、実Ollama smokeはpassedした。RC verdictは引き続き`PASS WITH KNOWN LIMITATIONS`である。ただしDeveloper ID identityとnotary profileがないため、適切な公開用macOS releaseに必要なPhase Bは現時点で実行できない。
+Phase Aのsource、test、credential-free app／DMG、実Ollama smokeはpassedした。RC verdictは引き続き`PASS WITH KNOWN LIMITATIONS`であり、v0.1.0のlocal-use goalは**ACHIEVED**と判断する。対象は、自分のMacで利用するApple Silicon arm64のad-hoc signed／non-notarized artifactである。
 
-残る作業は次のとおりで、各phaseには新しい明示承認が必要である。
+Apple Developer Programには現時点で加入しない。したがって、次のpublic distribution作業はすべてdeferredであり、現在のgoalでは実行しない。
 
-1. Phase A draft PRをreviewし、必要なら`main`へ人間がmergeする
-2. credentialを準備し、別承認後にPhase BのDeveloper ID signing／notarization／stapling／post-staple checksumを実行する
-3. 別承認後、正確な`main` commitへ`v0.1.0` tagを作り、draft GitHub Releaseとartifactを用意する
-4. downloadしたdraft artifactを手動smokeする
-5. さらに別の明示承認後にGitHub Releaseをpublishする
+- Developer ID signing、notarization、stapling、Gatekeeper release assessment
+- Git tag作成／push
+- GitHub Release作成、asset upload、publish
 
-Phase AではDeveloper ID release build、Apple notarization、Git tag作成／push、GitHub Release作成／変更、asset upload、publish、`main` mergeを行っていない。
+public distributionを再検討するのはApple Developer Programへ加入した後とし、その場合は新しい方針と明示承認のもとでrelease workflowを再開する。現時点ではDeveloper ID release build、Apple notarization、Git tag作成／push、GitHub Release作成／変更、asset upload、publishを行っていない。

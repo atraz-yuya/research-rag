@@ -26,10 +26,12 @@ v0.1.0には会話履歴がなく、質問は毎回独立して処理されま�
 
 ## 現在のstatus
 
-v0.1.0 release candidateは、macOS Apple Silicon arm64のpackaged GUIと実Ollamaで`PASS WITH KNOWN LIMITATIONS`です。まだ公開済みのnotarized release、Git tag、GitHub Releaseはありません。
+v0.1.0のlocal-use goalは達成済みです。macOS Apple Silicon arm64で、credential-freeなpackaged GUI／DMGと実Ollamaを`PASS WITH KNOWN LIMITATIONS`として検証しました。このlocal artifactはad-hoc署名済み、non-notarizedで、自分のMacで利用することを対象としています。
+
+Apple Developer Programには現時点で加入せず、Developer ID signing、notarization、Git tag、GitHub Release、public distributionはdeferredとします。公開済みのv0.1.0 releaseはありません。
 
 - [RC validation report](docs/release_candidate_v0.1.0.md)
-- [v0.1.0 release notes source](docs/release_notes_v0.1.0.md)
+- [v0.1.0 local-use completion notes](docs/release_notes_v0.1.0.md)
 - [v0.1.0 release readiness](docs/release_readiness_v0.1.0.md)
 - [Known limitations](docs/known_limitations.md)
 
@@ -45,7 +47,7 @@ packaged appを使う初回ユーザーにPythonやvirtual environmentは不要�
 
 ## macOSへインストールする
 
-公開済みのnotarized DMGはまだありません。検証用DMGを受け取った場合は、信頼できる配布元とartifactであることを確認してください。
+公開済みのnotarized DMGはありません。現在対象とするのは、自分のMacでcredential-free helperから作成したad-hoc signed／non-notarized local DMGです。public distribution用のGatekeeper-friendly artifactとして再配布しないでください。
 
 1. Macのarchitectureに合う`Research-RAG-<version>-macos-<architecture>.dmg`を入手する
 2. DMGを開く
@@ -256,7 +258,7 @@ Research RAGは、次の要素を小さな責務へ分けて実装していま�
 
 ### Local smoke artifact
 
-開発者はPySide6公式`pyside6-deploy`でcredential-freeなarm64 `.app`とlocal smoke DMGを作成できます。これはad-hoc署名であり、公開用notarized artifactではありません。
+PySide6公式`pyside6-deploy`でcredential-freeなarm64 `.app`とlocal-use DMGを作成できます。この経路がv0.1.0の現在の完成地点です。artifactはad-hoc署名済み、non-notarizedで、自分のMacでの利用を対象とし、公開配布用ではありません。
 
 ```bash
 ./scripts/build_macos_app.sh --dry-run
@@ -268,7 +270,7 @@ generated `.app`、DMG、iconset、ICNS、DB、PDFはGit管理しません。
 
 ### External release preparation
 
-repositoryにはDeveloper ID、notarytool、stapling、checksum、draft GitHub Releaseまでのhelperがありますが、real credentialを使うreleaseはまだ実行していません。real signing、tag、Release、publishには別途明示的な承認が必要です。
+repositoryにはDeveloper ID、notarytool、stapling、checksum、draft GitHub Releaseまでのhelperを保持していますが、public distributionはApple Developer Programへ加入するまでdeferredです。Developer ID signing、notarization、tag、GitHub Release、publishは現在のv0.1.0 local-use goalには含めず、実行しません。
 
 - [Release checklist](docs/release_checklist.md)
 - [RC validation report](docs/release_candidate_v0.1.0.md)
@@ -279,7 +281,7 @@ repositoryにはDeveloper ID、notarytool、stapling、checksum、draft GitHub R
 - [MVP specification](docs/mvp_spec.md)
 - [Known limitations](docs/known_limitations.md)
 - [v0.1.0 RC validation](docs/release_candidate_v0.1.0.md)
-- [v0.1.0 release notes source](docs/release_notes_v0.1.0.md)
+- [v0.1.0 local-use completion notes](docs/release_notes_v0.1.0.md)
 - [v0.1.0 release readiness](docs/release_readiness_v0.1.0.md)
 - [macOS release checklist](docs/release_checklist.md)
 - [Development log](docs/development_log.md)
