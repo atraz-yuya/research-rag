@@ -758,3 +758,26 @@ GUI、RAG pipeline、CLI、corpus SQLite schema v3、QStandardPaths、QtTaskRunn
 ### 互換性と今回の対象外
 
 GUI／RAG／CLI、corpus SQLite schema v3、QStandardPaths、model defaults、citation semantics、QtTaskRunner／teardown、Issue 027のNuitka Developer ID app-signing設計は変更していない。Mac App Store、auto update、custom DMG background、real tag／public GitHub Releaseは追加していない。
+
+## Issue 029: Validate the v0.1.0 release candidate end to end
+
+実施日: 2026-08-11
+
+### 実施内容
+
+- macOS 26.5.2 arm64、Python 3.11.15、PySide6／Qt 6.11.1、Nuitka 4.1.3、Ollama 0.32.6でv0.1.0 RCを検証した。defaultの`qwen3-embedding:0.6b`と`qwen3:4b-instruct`を使い、version endpoint、1024次元embedding、`think: false` generationが成功した
+- private資料を使わず、PyMuPDFで一時生成した3ページ以上のtext-based PDF 2冊を実際のPDF extractionからproduction chunking／embedding／retrieval／generationへ通した。PDF A、PDF B、両資料を区別する3質問で、回答、PDF名、1始まりpage、rank、score、source textを照合した
+- SQLite store／service再生成後もcorpusと文書が残り、質問embedding 1回だけで回答でき、document embeddingを再実行しないことを記録した
+- PDF Aだけを変更して`MODIFIED`→対象だけreindex→`CURRENT`を確認し、同じdocument IDを維持した。PDF BのChunk／embeddingは変わらず、変更factをAの新しいpageから回答した
+- PDF Bを一時的に移動して`MISSING`を確認し、保存済みcontentへの質問と他文書の利用を継続できた。sourceは元へ戻した
+- Ollamaを到達不能endpointへ切り替えたfailureと設定復元後の成功、invalid PDF追加のatomic failureと直後の正常質問、空質問のpreflight rejectionとnetwork call 0件を確認した
+- official `pyside6-deploy`で約171 MBのarm64 standalone appを生成し、bundle identifier、両version、ICNS、Qt runtime、strict ad-hoc signatureを確認した。約68 MBのcredential-free DMGをverify／mountし、appと`Applications -> /Applications`だけを確認して安全な一時領域へcopy／detachした
+- copied packaged appはsource tree／venv／`PYTHONPATH`なしで通常起動とoffscreen起動に成功し、schema v3のAppData corpusをbundle外に維持した。到達不能Ollama URLでも起動できた
+- FileProvider属性によりNuitkaの内部codesignが失敗した際、`pyside6-deploy`がexit 0とpartial bundleを残す事象をRC blockerとして再現した。local／release helperへQtCoreとCocoa platform pluginの必須検証を追加し、不完全bundleを明示的に失敗させるregression testを追加した
+- `QT_QPA_PLATFORM=offscreen python -X faulthandler -m pytest`で全442件を成功させ、worker／MainWindow focused suite 48件をfaulthandler付きfresh processで5回連続成功させた。`git diff --check`、local build／release／GitHub Release preparationの各dry-runも成功した
+
+### RC判定
+
+packaged appの起動、DMG、実Ollama production lifecycleは成功したが、macOS Accessibility権限がなくpackaged GUIの対話操作を自動化できなかった。未実施のGUI happy pathとfailure UXをPASSとせず、verdictは`FAIL (validation incomplete)`とした。別の対話可能なmacOS sessionでcorpus作成から質問、restart、reindex、failure recoveryをpackaged GUI上で完了する必要がある。詳細は`docs/release_candidate_v0.1.0.md`へ記録した。
+
+GUI／RAG／CLI、SQLite schema v3、QStandardPaths、model defaults、retrieval／citation semanticsは変更していない。Developer ID identityとnotary profileがないためreal signing／notarization／stapling／Gatekeeper release assessmentは未実施で、real tag／GitHub Release／publishも行っていない。

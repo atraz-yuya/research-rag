@@ -8,7 +8,7 @@
 
 テキストを含む1つ以上のPDFへ質問できるCLI版MVPと、保存済み資料セットを管理して質問できるPySide6デスクトップGUIを実装済みです。選択したPDFを1つの共有検索空間として扱い、ページ境界を保って全文書を横断検索します。Ollamaが生成した回答と、根拠となるPDF名・ページ番号・類似度・文章を表示します。SQLiteへ保存した資料セットでは、表示名の作成・変更・資料セット全体の削除、文書の変更検出と文書単位の追加・削除・再インデックスも利用できます。
 
-MVPの範囲と完了条件は [`docs/mvp_spec.md`](docs/mvp_spec.md) を参照してください。
+MVPの範囲と完了条件は [`docs/mvp_spec.md`](docs/mvp_spec.md) を参照してください。v0.1.0 release candidateの実機検証結果と未完了項目は [`docs/release_candidate_v0.1.0.md`](docs/release_candidate_v0.1.0.md) に記録しています。
 
 ## 必要な環境
 

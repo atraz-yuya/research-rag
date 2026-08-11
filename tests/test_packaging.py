@@ -163,10 +163,64 @@ def test_build_helper_validates_executable_and_ad_hoc_signature() -> None:
         helper_source
     )
     signing_commands = (
-        '/usr/bin/xattr -cr "$EXPECTED_APP"',
-        '/usr/bin/codesign --force --deep --sign - "$EXPECTED_APP"',
-        '/usr/bin/codesign --verify --deep --strict "$EXPECTED_APP"',
+        '"$XATTR_COMMAND" -cr "$EXPECTED_APP"',
+        '"$CODESIGN_COMMAND" --force --deep --sign - "$EXPECTED_APP"',
+        '"$CODESIGN_COMMAND" --verify --deep --strict "$EXPECTED_APP"',
     )
     command_offsets = [helper_source.index(command) for command in signing_commands]
     assert command_offsets == sorted(command_offsets)
     assert "&& \\" in helper_source
+    assert "-name QtCore" in helper_source
+    assert "-name libqcocoa.dylib" in helper_source
+
+
+def test_build_helper_rejects_partial_bundle_without_qt_runtime(
+    tmp_path: Path,
+) -> None:
+    fake_deploy = tmp_path / "pyside6-deploy"
+    fake_app = tmp_path / "output" / "Research RAG.app"
+    fake_deploy.write_text(
+        "#!/bin/sh\n"
+        "mkdir -p \"$FAKE_APP/Contents/MacOS\" \"$FAKE_APP/Contents/Resources\"\n"
+        ": > \"$FAKE_APP/Contents/MacOS/run_gui\"\n"
+        "chmod +x \"$FAKE_APP/Contents/MacOS/run_gui\"\n"
+        "cp \"$FAKE_ICON\" \"$FAKE_APP/Contents/Resources/ResearchRAG.icns\"\n"
+    )
+    fake_deploy.chmod(0o755)
+    fake_icon = tmp_path / "ResearchRAG.icns"
+    fake_icon_generator = tmp_path / "fake_icon_generator.py"
+    fake_icon_generator.write_text(
+        "import argparse\n"
+        "from pathlib import Path\n"
+        "parser = argparse.ArgumentParser()\n"
+        "parser.add_argument('--output', type=Path, required=True)\n"
+        "parser.add_argument('--dry-run', action='store_true')\n"
+        "args = parser.parse_args()\n"
+        "if not args.dry_run:\n"
+        "    args.output.write_bytes(b'fake icon')\n"
+    )
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "RESEARCH_RAG_BUILD_SYSTEM_NAME": "Darwin",
+            "RESEARCH_RAG_PYTHON": os.fspath(Path(os.sys.executable)),
+            "RESEARCH_RAG_BUILD_DIRECTORY": os.fspath(fake_app.parent),
+            "RESEARCH_RAG_ICON_GENERATOR": os.fspath(fake_icon_generator),
+            "RESEARCH_RAG_ICON_OUTPUT": os.fspath(fake_icon),
+            "PYSIDE6_DEPLOY": os.fspath(fake_deploy),
+            "FAKE_APP": os.fspath(fake_app),
+            "FAKE_ICON": os.fspath(fake_icon),
+        }
+    )
+
+    completed = subprocess.run(
+        [BUILD_HELPER],
+        cwd=REPOSITORY_ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode != 0
+    assert "incomplete bundle without the required Qt runtime" in completed.stderr

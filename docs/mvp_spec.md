@@ -140,6 +140,10 @@ release identityのcertificate／秘密鍵／password／Team ID、notary credent
 
 bundleへcorpus DBの`indexes.sqlite3`、GUI設定の`settings.ini`、source PDF、Ollama本体、Ollama modelを含めない。runtime data pathは既存の`QStandardPaths.AppDataLocation`を維持し、bundle内部へDBや設定を書き込まない。Ollama接続には保存済みGUI runtime設定のbase URLを使用する。corpus SQLite schemaはversion 3のままとし、CLI、`python -m research_rag.gui_app`、worker／teardownの動作を変更しない。
 
+## v0.1.0 Release Candidate validation
+
+Issue 029では、arm64 standalone appとcredential-free DMGの生成、metadata／icon／署名／mount、bundle外AppData、実Ollamaを使う2-PDF production RAG lifecycle、永続reload、文書単位reindex、missing source、Ollama failure recovery、invalid PDF、empty questionを検証した。packaged appはsource treeやvenvなしで起動したが、実行環境のmacOS Accessibility制約によりpackaged GUIの対話的E2Eは完了していない。そのためRC verdictはFAIL（validation incomplete）とし、未実施項目をPASSとして扱わない。詳細は[`release_candidate_v0.1.0.md`](release_candidate_v0.1.0.md)を参照する。
+
 ## 後続Issueで決定する事項
 
 次の値は現時点では固定せず、それぞれの機能を実装する後続Issueで事前に決定する。
