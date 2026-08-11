@@ -2,6 +2,8 @@
 
 このchecklistは、Research RAGのmacOS DMGを外部公開するときに上から順に確認する。helperはdraftまでしか作成せず、最後のpublishは必ず人間が行う。
 
+Issue 031 Phase Aで完了したpreflight evidenceは[`release_readiness_v0.1.0.md`](release_readiness_v0.1.0.md)に記録した。以下のcheckboxは実際のrelease artifactに対する作業記録として残し、credential-free preflightだけではDeveloper ID／notarization／tag／publish項目を完了扱いにしない。
+
 ## Source and tests
 
 - [ ] `pyproject.toml`の`[project].version`を意図して更新した
