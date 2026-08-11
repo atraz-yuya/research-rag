@@ -1,317 +1,283 @@
-# research-rag
+# Research RAG
 
-## プロジェクト概要
+Research RAGは、論文や学習資料のPDFへ質問し、ローカルLLMの回答と根拠を一緒に確認できるmacOSデスクトップアプリケーションです。複数のPDFを名前付きの「資料セット」として保存し、再起動後も同じindexを利用できます。
 
-`research-rag` は、研究資料として使用するPDFをローカル環境で検索し、その内容に基づく回答と根拠を提示するRAGアプリケーションです。
+```text
+PDF
+  → ローカルindex／embedding
+  → 質問
+  → 関連箇所を検索
+  → OllamaのローカルLLMが回答
+  → PDF名・ページ・根拠文章を表示
+```
 
-## 現在の開発段階
+PDFはユーザーが選んだ元の場所に残り、Research RAGが原本を削除することはありません。抽出した文章とembeddingはMac上のSQLiteへ保存されます。回答は必ず正しいとは限らないため、表示されたcitationを原文と照合してください。
 
-テキストを含む1つ以上のPDFへ質問できるCLI版MVPと、保存済み資料セットを管理して質問できるPySide6デスクトップGUIを実装済みです。選択したPDFを1つの共有検索空間として扱い、ページ境界を保って全文書を横断検索します。Ollamaが生成した回答と、根拠となるPDF名・ページ番号・類似度・文章を表示します。SQLiteへ保存した資料セットでは、表示名の作成・変更・資料セット全体の削除、文書の変更検出と文書単位の追加・削除・再インデックスも利用できます。
+## できること
 
-MVPの範囲と完了条件は [`docs/mvp_spec.md`](docs/mvp_spec.md) を参照してください。v0.1.0 release candidateの実機検証結果と未完了項目は [`docs/release_candidate_v0.1.0.md`](docs/release_candidate_v0.1.0.md) に記録しています。
+- テキストを含む1つ以上のPDFを横断検索する
+- 資料セットへ名前を付け、再起動後も利用する
+- ローカルのOllamaでembeddingと回答生成を行う
+- 回答と一緒にPDF名、1始まりのページ番号、類似度、根拠文章を表示する
+- 元PDFの変更・欠落を検出し、必要な文書だけ再インデックスする
+- 資料セットへのPDF追加、文書削除、名前変更、資料セット削除を行う
 
-## 必要な環境
+v0.1.0には会話履歴がなく、質問は毎回独立して処理されます。
 
-- Python 3.11以上
+## 現在のstatus
 
-## 開発環境のセットアップ
+v0.1.0 release candidateは、macOS Apple Silicon arm64のpackaged GUIと実Ollamaで`PASS WITH KNOWN LIMITATIONS`です。まだ公開済みのnotarized release、Git tag、GitHub Releaseはありません。
 
-macOSでは、リポジトリのルートで次のコマンドを実行して仮想環境を作成し、有効化します。
+- [RC validation report](docs/release_candidate_v0.1.0.md)
+- [Known limitations](docs/known_limitations.md)
+
+## 必要なもの
+
+packaged appを使う初回ユーザーにPythonやvirtual environmentは不要です。次を用意してください。
+
+- Apple Silicon搭載Mac。v0.1.0で実機検証したartifactはarm64です
+- テキストを選択・検索できるPDF。スキャン画像だけのPDFには対応しません
+- [Ollama for macOS](https://ollama.com/download/mac)
+- embedding model `qwen3-embedding:0.6b`
+- generation model `qwen3:4b-instruct`
+
+## macOSへインストールする
+
+公開済みのnotarized DMGはまだありません。検証用DMGを受け取った場合は、信頼できる配布元とartifactであることを確認してください。
+
+1. Macのarchitectureに合う`Research-RAG-<version>-macos-<architecture>.dmg`を入手する
+2. DMGを開く
+3. `Research RAG.app`をDMG内の`Applications` shortcutへdragする
+4. Finderでmounted DMGをejectする
+5. ApplicationsからResearch RAGを起動する
+
+インストールした`.app`にOllama、model、PDF、資料セットDBは含まれません。資料セットとGUI設定はbundle外の次の場所に保存されます。
+
+```text
+~/Library/Application Support/ResearchRAG/indexes.sqlite3
+~/Library/Application Support/ResearchRAG/settings.ini
+```
+
+## Ollamaを準備する
+
+1. Ollamaを公式download pageからインストールして起動する
+2. Terminalで現在の既定modelを取得する
+
+```bash
+ollama pull qwen3-embedding:0.6b
+ollama pull qwen3:4b-instruct
+```
+
+modelを確認するには次を実行します。
+
+```bash
+ollama list
+```
+
+既定の接続先とmodelは次のとおりです。
+
+| 設定 | 既定値 | 用途 |
+|---|---|---|
+| Ollama URL | `http://localhost:11434` | ローカルOllama APIへの接続先 |
+| Embedding model | `qwen3-embedding:0.6b` | PDFと質問を検索用vectorへ変換 |
+| Generation model | `qwen3:4b-instruct` | 検索された根拠から回答を生成 |
+| Top-K | `3` | 回答へ渡す検索結果の件数 |
+
+Research RAGはmodelを自動downloadしません。別modelや別hostのOllamaを使う場合はGUIの`設定`で変更できます。
+
+## 最初の5分
+
+1. Research RAGを起動する
+2. `新しい資料セット`を押す
+3. 1つ以上のtext-based PDFを選ぶ
+4. 内容が分かる資料セット名を入力する
+5. indexingが終わるまで待つ。処理中は進捗indicatorが動き、完了後に文書が`最新`と表示される
+6. 資料セットを選び、質問欄へ具体的な質問を入力する
+7. `質問する`を押す
+8. 回答を読み、その下の`参照`でPDF名、ページ、score、source textを確認する
+
+複数PDFを比較する質問では、「PDF Aの回復率とPDF Bの削減率を比較して」のように資料名、topic、比較するfactを具体的にすると検索範囲が明確になります。それでも検索や回答の正しさを保証するものではありません。
+
+## Citationの読み方
+
+各sourceは次の形式で表示されます。
+
+```text
+[1] document.pdf p.12
+score: 0.812345
+回答の根拠候補となったPDF本文
+```
+
+- `[1]`: 検索順位。1が最上位です
+- `document.pdf`: 根拠候補を抽出した元PDF名です
+- `p.12`: PDF内の利用者向け1始まりページ番号です
+- `score`: 質問とChunkのcosine similarityです。正しさの確率ではありません
+- source text: 回答生成へ渡した根拠候補です
+
+回答文だけで判断せず、主張を支えるPDF名・ページ・文章が表示されているか確認してください。
+
+## 資料を管理する
+
+Research RAGは元PDFの内容をSHA-256 fingerprintと比較し、次の状態を表示します。
+
+| 表示 | 意味 | 対応 |
+|---|---|---|
+| `最新` | 現在の元PDFがindex作成時と一致する | そのまま利用できます |
+| `変更あり` | 元PDFがindex作成後に変わった | 文書を選び`再インデックス`します |
+| `ファイルなし` | 記録したsource pathにPDFがない | 再インデックスする場合は元のpathへ戻します |
+| `未確認` | 比較用の信頼できるfingerprintがない | 必要に応じて元PDFから再インデックスします |
+
+`ファイルなし`でも、すでに保存したindexは質問に利用できます。ただし、その文書を再インデックスするには元PDFを記録済みpathへ復元する必要があります。
+
+Research RAG内で文書や資料セットを削除しても、元PDFは削除されません。SQLite内のindex dataだけが削除されます。
+
+## 設定
+
+GUIの`設定`から次を変更できます。設定は`settings.ini`へ保存され、再起動後も有効です。
+
+### Embedding model
+
+PDFと質問を検索用vectorへ変換するmodelです。変更は、新しく作成する資料セットだけに適用されます。既存資料セットへの質問、PDF追加、再インデックスは、その資料セットに保存済みのembedding modelを使い続けます。
+
+### Generation model
+
+検索されたsource textから回答を作るmodelです。変更は次の質問から反映されます。
+
+### Top-K
+
+質問に近いChunkを上位何件まで回答生成へ渡すかを指定します。既定値は3です。増やすと広い根拠を含められる一方、関連性の低い文章も増え、回答品質や処理時間へ影響する場合があります。
+
+### Ollama URL
+
+Ollama APIの接続先です。既定値は`http://localhost:11434`です。変更後の文書処理と質問から新しい接続先を使用し、設定を保存するだけではnetwork requestを行いません。
+
+## Troubleshooting
+
+### `Could not connect to Ollama`
+
+- Ollama applicationが起動しているか確認する
+- GUIのOllama URLを確認する。既定値は`http://localhost:11434`
+- Terminalで`ollama list`が成功するか確認する
+- `curl http://localhost:11434/api/version`でAPIへ到達できるか確認する
+- 設定を戻した後、同じ質問をもう一度実行する
+
+Research RAGはOllamaが停止中でも起動できますが、indexingと質問はOllamaなしでは実行できません。
+
+### Modelが見つからない
+
+現在の既定modelを取得し、`ollama list`で名前を確認します。
+
+```bash
+ollama pull qwen3-embedding:0.6b
+ollama pull qwen3:4b-instruct
+ollama list
+```
+
+GUIで別model名を設定した場合は、そのmodelも別途取得してください。
+
+### PDFを開けない
+
+拡張子だけでなく、実際にPDFとして開けるfileか確認してください。壊れたPDFやPDFではないfileは拒否され、資料セットへ有効な文書として保存されません。
+
+### `ファイルなし`と表示される
+
+Research RAGは追加時の元PDF pathを記録します。FinderでPDFを移動・rename・削除した場合は、元のpathへ戻して`状態を更新`してください。保存済みindexへの質問は可能ですが、再インデックスには元PDFが必要です。
+
+### スキャンPDFを検索できない
+
+OCRは実装していません。文字を選択できない画像だけのPDFからは検索用textを抽出できません。OCR済みのtext-based PDFを用意してください。
+
+### 検索結果から片方の資料が落ちる
+
+既定のdense retrievalとTop-K 3では、曖昧な複数資料比較質問の根拠が片方だけになる場合があります。資料名、section、topic、比較したいfactを質問へ明示してください。必要ならTop-Kを意図的に調整できますが、値を増やせば常に改善するわけではありません。
+
+詳細は[Known limitations](docs/known_limitations.md)を参照してください。
+
+## 開発する
+
+### 環境構築
+
+Python 3.11以上が必要です。macOSではrepository rootでvirtual environmentを作成します。
 
 ```bash
 python3.11 -m venv venv
 source venv/bin/activate
-```
-
-このプロジェクトでは、macOSで `.venv` 内のeditable install用 `.pth` にhiddenフラグが付き、パッケージをimportできなくなった事例を避けるため、仮想環境ディレクトリとして `venv` を使用しています。
-
-続いて、プロジェクト本体と開発用依存ライブラリを編集可能モードでインストールします。
-
-```bash
 python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
 ```
 
-## テスト
+このprojectでは、macOSのFileProvider属性がeditable install用`.pth`を隠した事例を避けるため、開発用directory名に`venv`を使用しています。
 
-仮想環境を有効化し、開発用依存ライブラリをインストールした状態で実行します。
-
-```bash
-python -m pytest
-```
-
-通常の単体テストはOllamaへ接続しません。
-
-GUIテストだけをheadless環境で実行する場合は、Qtのoffscreen platformを指定します。`pytest-qt`は使用していません。
+### GUIをsourceから起動する
 
 ```bash
-QT_QPA_PLATFORM=offscreen python -m pytest \
-    tests/test_gui_service.py \
-    tests/test_gui_worker.py \
-    tests/test_gui_app.py \
-    tests/test_main_window.py -v
-```
-
-## 再利用可能なインメモリindex
-
-同じPDF集合へ複数回質問する場合は、文書側の処理を`build_rag_index()`で1回だけ実行し、返されたimmutableな`RagIndex`を再利用できます。質問embeddingには、index作成時に記録された埋め込みモデルが自動的に使われます。
-
-```python
-from pathlib import Path
-
-from research_rag.ollama_client import OllamaClient
-from research_rag.rag_service import (
-    answer_question_from_index,
-    build_rag_index,
-)
-
-client = OllamaClient()
-index = build_rag_index(
-    [Path("main-paper.pdf"), Path("supplement.pdf")],
-    embedding_model="qwen3-embedding:0.6b",
-    client=client,
-)
-
-first_answer = answer_question_from_index(
-    index,
-    "主な提案手法は何ですか？",
-    generation_model="qwen3:4b-instruct",
-    client=client,
-)
-second_answer = answer_question_from_index(
-    index,
-    "実験ではどのデータセットを使っていますか？",
-    generation_model="qwen3:4b-instruct",
-    client=client,
-)
-```
-
-`RagIndex`自身による再利用は同じPythonプロセスのメモリ内に限られます。永続化には次節の専用storeを使います。既存のCLIと`answer_question_from_pdf()`／`answer_question_from_pdfs()`は従来どおり利用でき、内部で同じbuild＋answerライフサイクルを1回ずつ実行します。
-
-## SQLiteへのindex保存
-
-`SQLiteRagIndexStore`を使うと、準備済みindexをPython標準ライブラリのSQLiteへ保存し、別プロセスで読み直せます。データベースはリポジトリ外のユーザーデータ領域へ置いてください。
-
-```python
-from pathlib import Path
-
-from research_rag.index_store import SQLiteRagIndexStore
-
-pdf_paths = [Path("main-paper.pdf"), Path("supplement.pdf")]
-db_path = Path.home() / ".research-rag" / "indexes.sqlite3"
-
-store = SQLiteRagIndexStore(db_path)
-store.initialize()
-metadata = store.save_index(index, pdf_paths, display_name="卒業研究 関連論文")
-
-# 別プロセス相当の新しいstore instanceから読み込む
-reopened_store = SQLiteRagIndexStore(db_path)
-reopened_store.initialize()
-loaded_index = reopened_store.load_index(metadata.index_id)
-
-saved_indexes = reopened_store.list_indexes()
-renamed = reopened_store.rename_index(metadata.index_id, "研究資料 2026")
-deleted = reopened_store.delete_index(metadata.index_id)
-```
-
-保存形式はschema version 3です。schema version 1／2のDBは`initialize()`時に1つのtransaction内でv1→v2→v3の順に移行し、既存のindex・文書・Chunk・embedding・UUIDを維持します。資料セットの`display_name`は表示専用metadataで、機械的な永続identityは引き続き`index_id`です。移行した既存資料セットの名前はNULLのままとし、GUIでは名前を設定するまで従来のPDF名ベース表示へfallbackします。文書・indexには永続UUIDを付け、embeddingはpickleを使わずlittle-endian IEEE-754 float64 BLOBとして保存します。元PDFの絶対source pathも管理情報として保持しますが、loadや質問時にPDFが存在する必要はありません。現在のCLIは永続化を自動的に使用せず、構文も従来どおりです。
-
-## 永続corpusの文書管理
-
-新しく永続corpusを作る場合は`PersistentRagDocumentManager`を使用します。作成時に各PDFのSHA-256をindex処理の前後で確認し、保存済み内容とsource fileの関係を信頼できる形で記録します。
-
-```python
-from pathlib import Path
-
-from research_rag.document_manager import PersistentRagDocumentManager
-from research_rag.index_store import SQLiteRagIndexStore
-from research_rag.ollama_client import OllamaClient
-
-store = SQLiteRagIndexStore(Path.home() / ".research-rag" / "indexes.sqlite3")
-store.initialize()
-manager = PersistentRagDocumentManager(store, client=OllamaClient())
-
-metadata = manager.create_index(
-    [Path("main-paper.pdf"), Path("supplement.pdf")],
-    embedding_model="qwen3-embedding:0.6b",
-    display_name="卒業研究 関連論文",
-)
-
-statuses = manager.inspect_documents(metadata.index_id)
-added = manager.add_document(metadata.index_id, Path("related-paper.pdf"))
-reindexed = manager.reindex_document(
-    metadata.index_id,
-    metadata.documents[0].document_id,
-)
-removed = manager.remove_document(metadata.index_id, added.document_id)
-```
-
-`inspect_documents()`は、保存時と現在のSHA-256を比較して`CURRENT`、`MODIFIED`、`MISSING`、`UNKNOWN`を返します。SHA-256を変更判定の正とし、sizeとmtimeは表示・診断用です。schema v1から移行した文書と、低水準の`save_index()`で保存した文書には信頼できるfingerprintがないため`UNKNOWN`になります。inspectionはPDF抽出やOllamaを実行しません。
-
-追加と再indexでは、対象PDFだけをproduction pipelineで処理し、保存済みembedding modelを使用します。削除では対象文書だけを削除します。いずれも既存の`index_id`と変更しない文書の`document_id`を維持し、既存文書を再embeddingしません。source fileが処理中に変わった場合や外部処理・DB処理が失敗した場合は、保存済みcorpusを変更しません。最後の検索可能文書の削除は拒否されるため、corpus全体を消す場合は`delete_index()`を使用します。
-
-## デスクトップGUIの実行
-
-GUIはPySide6を使用し、CLIとは別のエントリーポイントで起動します。先にOllamaを起動し、CLIと同じ埋め込みモデルと生成モデルを準備してください。
-
-```bash
-ollama pull qwen3-embedding:0.6b
-ollama pull qwen3:4b-instruct
 python -m research_rag.gui_app
 ```
 
-GUIでは、保存済み資料セットの一覧、文書の`CURRENT`／`MODIFIED`／`MISSING`／`UNKNOWN`状態、source pathを確認できます。複数PDFから名前付き資料セットを作成し、後から名前を変更できます。PDFの追加、選択文書の再インデックスと削除、状態更新、資料セットへの質問にも対応します。`資料セットを削除`は、その資料セットに属するSQLite内のindex・文書・Chunk・embeddingをまとめて削除しますが、元PDFファイルそのものは削除しません。表示名の重複は許可され、内部のUUIDで資料セットを区別します。
+### CLIを使う
 
-PDF抽出やOllama処理などの実行中は、正確な進捗率を取得できないため、割合を表示しないindeterminate progress indicatorと操作内容を表示します。処理中は競合する操作と設定変更を無効化し、完了後は操作ごとの成功メッセージを表示します。失敗時もindicatorを解除して操作可能な状態へ戻り、質問文、既存の回答・参照、資料セット、正常に表示済みの文書状態を不要に消去しません。
+CLIは実行ごとにmemory内indexを作り、SQLiteへ自動保存しません。
 
-資料セットがない場合と未選択の場合は、次に行う操作をempty-state labelで案内します。回答・参照欄の説明はplaceholderであり、実データとしてコピーされません。文書状態はGUI上で`最新`（保存時と一致）、`変更あり`（元PDFが変更済み）、`ファイルなし`（保存元に存在しない）、`未確認`（比較用fingerprintなし）と表示し、詳細はtooltipで確認できます。内部のstatus値と変更検出ロジックは従来どおりです。
+```bash
+python -m research_rag.cli \
+  main-paper.pdf \
+  "主な提案手法は何ですか？" \
+  --pdf supplementary-material.pdf
+```
 
-`設定`画面では、Embedding model、Generation model、Top-K（1〜100）、Ollama URLを変更できます。設定は検証後に`settings.ini`へ保存され、GUI再起動後も引き継がれます。Embedding modelの変更は、新しく作成する資料セットだけに適用されます。既存資料セットへの質問、PDF追加、再インデックスは、その資料セットに保存済みのembedding modelを引き続き使用し、選択中の実際のモデル名は資料セット一覧の下に表示されます。Generation modelとTop-Kは次の質問から反映され、Ollama URLを変更すると以後の文書処理と質問が同じ新しい接続先を使います。設定の適用だけではOllamaへ接続しません。
+主なoptionは`--embedding-model`、`--generation-model`、`--top-k`、`--ollama-base-url`、繰り返し指定可能な`--pdf`です。異なるdirectoryにあっても同じbasenameのPDFは同時に指定できません。
 
-既定のSQLite DBはQtの`QStandardPaths.AppDataLocation`配下に作成されます。macOSでは通常、`~/Library/Application Support/ResearchRAG/indexes.sqlite3`です。GUI設定は同じディレクトリの`settings.ini`へ、corpus SQLiteとは分離して保存します。元PDFの本文はSQLiteへChunkとembeddingとして保存されますが、元PDFファイルをアプリケーションデータ領域へコピーしません。そのため、追加後に元PDFを移動・変更・削除すると、状態はそれぞれ`MISSING`または`MODIFIED`になります。保存済みChunkは引き続き質問に利用でき、再インデックスには元のsource pathにPDFが必要です。
+### Test
 
-資料セット作成、追加、再インデックス、状態確認、質問はQtのworker threadで実行されます。処理中にwindowを閉じた場合は、実行中の有限処理が安全に終了してからwindowを閉じます。Ollamaへ接続できない場合や処理に失敗した場合はエラーダイアログを表示し、質問入力を保持したまま操作可能な状態へ戻ります。会話履歴は保持せず、質問ごとに独立して回答します。
+通常の自動testは実Ollamaへ接続しません。
 
-## macOSアプリケーションのビルド
+```bash
+QT_QPA_PLATFORM=offscreen python -X faulthandler -m pytest
+```
 
-macOSでは、PySide6公式の`pyside6-deploy`を使ってstandaloneな`Research RAG.app`を再現できます。PyInstallerは使用しません。専用iconはPySide6の描画APIで決定的に生成され、`iconutil`で`build/generated/ResearchRAG.icns`へ変換された後、署名前のapp bundleへ組み込まれます。生成PNG、iconset、ICNSはbuild成果物でありGit管理しません。
+## Engineering scope
 
-### Local development app
+Research RAGは、次の要素を小さな責務へ分けて実装しています。
 
-仮想環境を有効化して開発用installを済ませたリポジトリルートで、最初にdry-runを確認し、その後build helperを実行します。
+- PyMuPDFによるpage-aware text extraction
+- ページをまたがないChunking、Ollama embedding、cosine similarity retrieval
+- local LLM answer generationとgrounded citation表示
+- reusable in-memory indexとSQLite schema v3 persistence
+- SHA-256によるsource change detectionと文書単位のatomic reindex
+- PySide6 GUIとbackground worker／deterministic teardown
+- deterministic icon、standalone `.app`、DMG、signing／notarization-ready workflow
+- mock中心のautomated test、retrieval evaluation、実Ollama RC validation
+
+仕様と設計判断は[MVP specification](docs/mvp_spec.md)、実装の経緯は[development log](docs/development_log.md)を参照してください。
+
+## Release／packaging
+
+### Local smoke artifact
+
+開発者はPySide6公式`pyside6-deploy`でcredential-freeなarm64 `.app`とlocal smoke DMGを作成できます。これはad-hoc署名であり、公開用notarized artifactではありません。
 
 ```bash
 ./scripts/build_macos_app.sh --dry-run
 ./scripts/build_macos_app.sh
-```
-
-成果物は`build/deploy/Research RAG.app`です。build helperは内部でicon generatorと`pyside6-deploy`を呼び、specに記録したNuitka versionも明示的に適用します。macOS以外、または必要なtoolがない場合は理由を表示して失敗します。実ビルドでは環境固有値を書き戻さない一時specを使い、bundle identifierは`io.github.atraz-yuya.research-rag`、両version fieldは`pyproject.toml`から、`CFBundleIconFile`は`ResearchRAG.icns`から設定します。metadataとiconは署名前に完成し、生成後はローカル用ad-hoc署名のstrict検証まで成功した場合だけ完了とします。Apple Developer credentialsは不要ですが、Developer ID署名ではありません。開発時の`python -m research_rag.gui_app`とCLIも従来どおり利用できます。
-
-ローカルでbuildしたDeveloper ID未署名（ad-hoc署名）のアプリは、次のように起動できます。
-
-```bash
-open "build/deploy/Research RAG.app"
-```
-
-`.app`には`indexes.sqlite3`、`settings.ini`、PDF、Ollama本体、Ollama modelを含めません。DBと設定は起動後も`QStandardPaths.AppDataLocation`（macOSでは通常`~/Library/Application Support/ResearchRAG`）へ保存され、app bundle内部には書き込みません。Ollamaは別途起動・model準備が必要で、接続先にはGUIで保存したOllama URLを使います。
-
-### Local DMG smoke artifact
-
-credential-freeなローカルappを、`Research RAG.app`と`Applications -> /Applications`だけを含むread-only UDZO DMGへまとめられます。outputを省略するとproject versionと実際のMach-O architectureから`build/dmg/Research-RAG-<version>-macos-<architecture>.dmg`を決定し、`hdiutil verify`成功後だけ完了します。これはlocal smoke用で、Developer ID署名やnotarization済み配布物ではありません。
-
-```bash
 ./scripts/package_macos_dmg.sh "build/deploy/Research RAG.app"
 ```
 
-DMGをmountして内容を確認する場合も、`Applications` symlinkを使って実際の`/Applications`へコピーする必要はありません。安全な一時ディレクトリへappをコピーして起動確認してください。
+generated `.app`、DMG、iconset、ICNS、DB、PDFはGit管理しません。
 
-### External release DMG
+### External release preparation
 
-配布用releaseはローカルbuildとは別のhelperで作成します。まずApple Developer certificateの秘密鍵をKeychainへ登録し、利用可能なidentityを確認します。certificate、秘密鍵、password、Team IDはrepositoryへ保存しません。
+repositoryにはDeveloper ID、notarytool、stapling、checksum、draft GitHub Releaseまでのhelperがありますが、real credentialを使うreleaseはまだ実行していません。real signing、tag、Release、publishには別途明示的な承認が必要です。
 
-```bash
-security find-identity -v -p codesigning
-```
+- [Release checklist](docs/release_checklist.md)
+- [RC validation report](docs/release_candidate_v0.1.0.md)
 
-notarytool用credentialは一度だけKeychainへ保存します。次のコマンドはpassword optionを指定しないため、app-specific passwordがterminalのsecure promptで入力されます。`<APPLE_ID>`と`<TEAM_ID>`は手元の値に置き換えてください。
+## Documentation
 
-```bash
-xcrun notarytool store-credentials "research-rag-notary" \
-  --apple-id "<APPLE_ID>" \
-  --team-id "<TEAM_ID>"
-```
+- [Project overview](docs/project_overview.md)
+- [MVP specification](docs/mvp_spec.md)
+- [Known limitations](docs/known_limitations.md)
+- [v0.1.0 RC validation](docs/release_candidate_v0.1.0.md)
+- [macOS release checklist](docs/release_checklist.md)
+- [Development log](docs/development_log.md)
 
-identityとKeychain profile名だけを環境変数で渡し、先にcredential-freeなdry-runを確認します。release helperはad-hoc署名へfallbackしません。
-
-```bash
-export RESEARCH_RAG_DEVELOPER_ID_APPLICATION="Developer ID Application: Your Name (TEAMID)"
-export RESEARCH_RAG_NOTARY_PROFILE="research-rag-notary"
-
-./scripts/release_macos_app.sh --dry-run
-./scripts/release_macos_app.sh
-```
-
-実releaseではcustom iconとmetadataをbuild前にNuitkaへ渡し、NuitkaがDeveloper ID署名したappを後から変更・再署名しません。app signatureを検証後、実architecture名のDMGを作り、`io.github.atraz-yuya.research-rag.dmg`としてDeveloper ID Applicationで署名します。DMG署名に`codesign --deep`は使いません。配布対象のDMG自体を`xcrun notarytool submit --wait`へ送り、Accepted後にDMGへstapleし、stapler、codesign、hdiutil、Gatekeeperで検証します。最終staple後のDMGから`Research-RAG-<version>-macos-<architecture>.dmg.sha256`を生成します。失敗時はsubmission IDとnotarization logの確認経路を残します。dry-runはbuild、署名、Keychain変更、Apple通信を行いません。
-
-### GitHub Release preparation
-
-将来の配布前確認には、まずread-onlyなdry-runを使います。
-
-```bash
-./scripts/prepare_github_release.sh --dry-run
-```
-
-実行pathは、project versionと一致する既存の`v<version>` tagがlocalとremoteに存在し、意図したHEADを指すこと、DMG／checksum／architectureを検証してから、`gh release create --verify-tag --draft`でDMGとchecksumを添付します。tagを作成・pushせず、Releaseをpublishしません。実tagやdraft Releaseの作成は、このIssueの実装・検証では行っていません。手動配布時は[release checklist](docs/release_checklist.md)を上から確認してください。
-
-```bash
-./scripts/prepare_github_release.sh \
-  "build/release/Research-RAG-0.1.0-macos-arm64.dmg"
-```
-
-現段階では公開済みdownloadable release、Mac App Store、auto update、custom Finder background、cross-platform installerには対応しません。
-
-## CLIの実行
-
-### 1. 仮想環境を有効化する
-
-```bash
-source venv/bin/activate
-```
-
-### 2. Ollamaを起動する
-
-別のターミナルでOllamaを起動します。すでにサービスとして起動している場合、この操作は不要です。
-
-```bash
-ollama serve
-```
-
-### 3. モデルを準備する
-
-埋め込みモデルと生成モデルをそれぞれ取得します。
-
-```bash
-ollama pull qwen3-embedding:0.6b
-ollama pull qwen3:4b-instruct
-```
-
-### 4. PDFへ質問する
-
-従来どおり、1つのPDFへ質問できます。
-
-```bash
-python -m research_rag.cli \
-    sample.pdf \
-    "この論文の主な提案手法は何ですか？" \
-    --embedding-model qwen3-embedding:0.6b \
-    --generation-model qwen3:4b-instruct \
-    --top-k 3
-```
-
-追加のPDFは`--pdf`を繰り返して指定します。最初の位置引数のPDF、各`--pdf`の順に読み込みますが、検索順位はPDFごとに分けず、すべてのチャンクを対象に一度だけ計算します。
-
-```bash
-python -m research_rag.cli \
-    main-paper.pdf \
-    "これらの資料に共通する結論は何ですか？" \
-    --pdf supplementary-material.pdf \
-    --pdf related-paper.pdf
-```
-
-出典の識別にファイル名を使うため、異なるディレクトリにあっても同じbasename（例: `paper.pdf`）を持つPDFは同時に指定できません。テキストを抽出できないPDFが含まれていても、ほかに検索可能なPDFがあれば処理を続行します。すべてのPDFから検索可能なチャンクを作れない場合はエラーになります。
-
-モデル指定を省略した場合は、上記の2モデルを使用します。Ollamaの接続先はデフォルトで `http://localhost:11434` です。別のモデルや接続先を使用する場合は、次のオプションで変更できます。
-
-```text
---embedding-model MODEL
---generation-model MODEL
---top-k NUMBER
---ollama-base-url URL
---pdf PDF
-```
-
-CLIは回答本文に続けて、検索順位、PDF名、PDF内で1始まりのページ番号、コサイン類似度、根拠文章を表示します。PDFの抽出・チャンク・埋め込みは実行ごとのメモリ内だけに保持され、永続化されません。
-
-## MVPの対象外
-
-OCR、会話履歴、FAISS／ChromaなどのベクトルDB、クラウドLLMには対応していません。フォルダやglobによるPDFの自動収集、ファイル監視、自動再インデックスも行いません。
+Screenshotsは、private PDF／pathを含めず安全に手動captureできる段階で追加します。このdocumentation更新では新しいmacOS Accessibility／screen-recording permissionを要求せず、画像を作成・捏造していません。

@@ -6,7 +6,9 @@
 
 ## 現在のマイルストーン
 
-現在は、単一のPDFを処理するCLI版MVPを実装する。
+現在は、macOSデスクトップ版v0.1.0のrelease readiness段階にある。初回ユーザー向けonboarding、release documentation、最終release準備を進める。
+
+複数PDF対応のGUI／RAG、SQLite永続化schema v3、文書変更検出は実装済みである。`QStandardPaths.AppDataLocation`に使うapplication identityと保存先は互換性のため維持する。real tag、GitHub Release、Developer ID署名、notarization、publishは、明示的な許可なしに実行しない。生成した`.app`、DMG、iconset、PDF、DBなどのbuild／validation artifactはcommitしない。
 
 ## コーディング規則
 
